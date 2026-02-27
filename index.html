@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      color: #eee;
+      font-family: monospace;
+      padding: 2rem;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 1.5rem; color: #7cf; }
+    .experiments {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: #7cf; }
+    .card-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #222;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+    }
+    .card-body { padding: 0.75rem; }
+    .card-title { font-size: 0.9rem; font-weight: bold; }
+    .card-desc { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Three.js Lab</h1>
+  <div class="experiments">
+    <a class="card" href="01-rotating-cube.html">
+      <div class="card-thumb">📦</div>
+      <div class="card-body">
+        <div class="card-title">01 - Rotating Cube</div>
+        <div class="card-desc">基本的な回転するキューブ</div>
+      </div>
+    </a>
+  </div>
+</body>
+</html>
