@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>02 - Photo Terrain | Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root { --accent: #7cf; --border: #2a2a32; }
+    html, body { height: 100%; }
+    body { background: #0a0a0c; overflow: hidden; font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: #e8e8ea; }
+    canvas { display: block; }
+
+    /* back link */
+    #back {
+      position: fixed; top: 1rem; left: 1rem; z-index: 10;
+      color: var(--accent); font-size: 0.85rem; text-decoration: none;
+      background: rgba(0,0,0,0.5); padding: 0.3rem 0.6rem;
+      border-radius: 4px; border: 1px solid var(--border);
+    }
+    #back:hover { border-color: var(--accent); }
+
+    /* caption */
+    #caption {
+      position: fixed; bottom: 1rem; left: 1rem; z-index: 10;
+      font-size: 0.75rem; color: #9a9aa4; line-height: 1.5;
+      background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem;
+      border-radius: 6px; border: 1px solid var(--border); max-width: 60vw;
+    }
+    #caption b { color: var(--accent); font-weight: 600; }
+
+    /* control panel */
+    #panel {
+      position: fixed; top: 1rem; right: 1rem; z-index: 10;
+      width: 232px; background: rgba(16,16,20,0.82);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.85rem 0.95rem; backdrop-filter: blur(8px);
+      font-size: 0.74rem;
+    }
+    #panel h2 {
+      font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 0.7rem; font-weight: 700;
+    }
+    .ctrl { margin-bottom: 0.65rem; }
+    .ctrl label { display: flex; justify-content: space-between; color: #b8b8c0; margin-bottom: 0.22rem; }
+    .ctrl label .v { color: #e8e8ea; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none; width: 100%; height: 3px;
+      background: #34343c; border-radius: 2px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 13px; height: 13px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+      border: 2px solid #0a0a0c;
+    }
+    .row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .toggle, .btn {
+      flex: 1; min-width: 64px; text-align: center; cursor: pointer; user-select: none;
+      font-size: 0.7rem; padding: 0.35rem 0.3rem; border-radius: 6px;
+      border: 1px solid var(--border); background: #16161c; color: #b8b8c0;
+      transition: all .15s;
+    }
+    .toggle:hover, .btn:hover { border-color: var(--accent); color: #e8e8ea; }
+    .toggle.on { background: rgba(119,204,255,0.16); border-color: var(--accent); color: var(--accent); }
+    .sep { height: 1px; background: var(--border); margin: 0.7rem 0; }
+    .file-hint { color: #70707a; font-size: 0.68rem; margin-top: 0.4rem; line-height: 1.4; }
+
+    /* drop overlay */
+    #drophint {
+      position: fixed; inset: 0; z-index: 5; display: none;
+      align-items: center; justify-content: center; pointer-events: none;
+      flex-direction: column; gap: 0.6rem; text-align: center;
+    }
+    #drophint .big { font-size: 1.1rem; color: var(--accent); }
+    #drophint .sub { font-size: 0.8rem; color: #9a9aa4; }
+    body.dragging::after {
+      content: ""; position: fixed; inset: 0; z-index: 4;
+      border: 2px dashed var(--accent); margin: 0.6rem; border-radius: 12px;
+      background: rgba(119,204,255,0.05); pointer-events: none;
+    }
+    #loading {
+      position: fixed; inset: 0; z-index: 20; display: flex;
+      align-items: center; justify-content: center; background: #0a0a0c;
+      color: #9a9aa4; font-size: 0.85rem; transition: opacity .5s; letter-spacing: 0.05em;
+    }
+    #loading.hide { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <a id="back" href="index.html">← 一覧へ</a>
+
+  <div id="caption">
+    <b>02 · Photo Terrain</b> — 画像の明暗を高さに変換した3Dレリーフ<br>
+    ドラッグで回転 / マウス移動でライト探索 / 画像をドロップで差し替え
+  </div>
+
+  <div id="panel">
+    <h2>Controls</h2>
+    <div class="ctrl">
+      <label>高さ <span class="v" id="v-height">0.90</span></label>
+      <input type="range" id="height" min="0" max="2.5" step="0.01" value="0.9">
+    </div>
+    <div class="ctrl">
+      <label>なめらかさ <span class="v" id="v-smooth">1</span></label>
+      <input type="range" id="smooth" min="0" max="6" step="1" value="1">
+    </div>
+    <div class="ctrl">
+      <label>コントラスト <span class="v" id="v-contrast">1.20</span></label>
+      <input type="range" id="contrast" min="0.5" max="2.5" step="0.01" value="1.2">
+    </div>
+    <div class="ctrl">
+      <label>地層化 <span class="v" id="v-terrace">off</span></label>
+      <input type="range" id="terrace" min="0" max="20" step="1" value="0">
+    </div>
+    <div class="row">
+      <div class="toggle" id="t-invert">明暗反転</div>
+      <div class="toggle" id="t-material">石膏</div>
+    </div>
+    <div class="row">
+      <div class="toggle on" id="t-light">ライト追従</div>
+      <div class="toggle" id="t-rotate">自動回転</div>
+    </div>
+    <div class="sep"></div>
+    <div class="row">
+      <div class="btn" id="b-rise">再生成 ▶</div>
+      <div class="btn" id="b-file">画像を選ぶ</div>
+    </div>
+    <div class="file-hint">公開版は権利保護のため初期画像なし。手元の画像をドロップして地形化できます。</div>
+    <input type="file" id="file" accept="image/*" style="display:none">
+  </div>
+
+  <div id="drophint">
+    <div class="big">画像をドロップ</div>
+    <div class="sub">写真の明暗が立体レリーフになります</div>
+  </div>
+
+  <div id="loading">loading…</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ---------- config ----------
+    const SEG_X = 280;          // plane subdivisions (width); height derived from image aspect
+    const PLANE_W = 4.0;        // world width of the relief
+    const MAX_TEX = 4096;       // cap display-texture dimension (GPU-safe; visually full quality)
+    const RISE_DUR = 1.3;       // seconds for the flat->relief animation
+    const DEFAULT_IMG = 'assets/02-portrait.jpg'; // local default (gitignored); 404s on public demo
+
+    // ---------- scene ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a0c);
+    scene.fog = new THREE.Fog(0x0a0a0c, 9, 18);
+
+    const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(0, 0.15, 6);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 3;
+    controls.maxDistance = 11;
+    controls.target.set(0, 0, 0);
+
+    // ---------- lights ----------
+    const ambient = new THREE.AmbientLight(0xffffff, 0.16);
+    scene.add(ambient);
+
+    const keyLight = new THREE.PointLight(0xfff1dd, 26, 40, 2); // mouse-following
+    keyLight.position.set(1.6, 1.4, 2.6);
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x5566aa, 0.35);
+    fillLight.position.set(-3, -1, 2);
+    scene.add(fillLight);
+
+    const rim = new THREE.DirectionalLight(0x335577, 0.5);
+    rim.position.set(0, 2, -3);
+    scene.add(rim);
+
+    // ---------- relief mesh (built/rebuilt per image) ----------
+    let geometry = null, mesh = null;
+    let baseLum = null;   // Float32Array, per-vertex luminance 0..1 (raw sample)
+    let blurLum = null;   // Float32Array, smoothed copy
+    let gridW = 0, gridH = 0, vCount = 0;
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 0.74, metalness: 0.0, side: THREE.FrontSide
+    });
+    const STONE_COLOR = new THREE.Color(0xcabfae);
+    let currentTex = null; // photo texture handle (restored when toggling 石膏 -> 写真)
+    function applyMaterialMode() {
+      if (params.stone) {
+        material.map = null; material.color.copy(STONE_COLOR); material.roughness = 0.92;
+      } else {
+        material.map = currentTex; material.color.setHex(0xffffff); material.roughness = 0.74;
+      }
+      material.needsUpdate = true;
+    }
+
+    const params = {
+      height: 0.9, smooth: 1, contrast: 1.2, terrace: 0,
+      invert: false, stone: false, lightFollow: true, autoRotate: false
+    };
+    let rise = 0, rising = false, needsRebuild = false;
+
+    // separable box blur over the luminance grid
+    function computeBlur() {
+      const r = Math.round(params.smooth);
+      if (r <= 0 || !baseLum) { blurLum = baseLum ? baseLum.slice() : null; return; }
+      const W = gridW, H = gridH;
+      const tmp = new Float32Array(vCount);
+      const out = new Float32Array(vCount);
+      // horizontal
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          let s = 0, n = 0;
+          for (let k = -r; k <= r; k++) {
+            const xx = x + k;
+            if (xx < 0 || xx >= W) continue;
+            s += baseLum[y * W + xx]; n++;
+          }
+          tmp[y * W + x] = s / n;
+        }
+      }
+      // vertical
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          let s = 0, n = 0;
+          for (let k = -r; k <= r; k++) {
+            const yy = y + k;
+            if (yy < 0 || yy >= H) continue;
+            s += tmp[yy * W + x]; n++;
+          }
+          out[y * W + x] = s / n;
+        }
+      }
+      blurLum = out;
+    }
+
+    function rebuildHeights() {
+      if (!mesh || !blurLum) return;
+      const pos = geometry.attributes.position;
+      const c = params.contrast, t = params.terrace, inv = params.invert;
+      const hs = params.height * rise;
+      for (let i = 0; i < vCount; i++) {
+        let l = blurLum[i];
+        l = (l - 0.5) * c + 0.5;
+        l = l < 0 ? 0 : l > 1 ? 1 : l;
+        if (inv) l = 1 - l;
+        if (t >= 2) l = Math.round(l * t) / t;
+        pos.setZ(i, l * hs);
+      }
+      pos.needsUpdate = true;
+      geometry.computeVertexNormals();
+    }
+
+    // Vertical subdivisions for a given image aspect. Clamped so a pathological
+    // drag-dropped aspect ratio (e.g. a 1x4000 sliver) can't request hundreds of
+    // millions of vertices. Shared by the luminance grid AND the mesh so their
+    // sizes always match.
+    const MAX_SEG_Y = 2000;
+    const segYFor = aspect => Math.min(MAX_SEG_Y, Math.max(1, Math.round(SEG_X * aspect)));
+
+    function buildMesh(imgWidth, imgHeight, lumGrid) {
+      if (mesh) { scene.remove(mesh); geometry.dispose(); }
+      const aspect = imgHeight / imgWidth;
+      const planeH = PLANE_W * aspect;
+      const segY = segYFor(aspect);
+      geometry = new THREE.PlaneGeometry(PLANE_W, planeH, SEG_X, segY);
+      gridW = SEG_X + 1; gridH = segY + 1; vCount = gridW * gridH;
+      baseLum = lumGrid; // expected length vCount
+      mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+      computeBlur();
+      rise = 0; rising = true; rebuildHeights();
+    }
+
+    // ---------- image -> texture + luminance grid ----------
+    function processImage(img) {
+      const iw = img.width, ih = img.height;
+      const aspect = ih / iw;
+      const segY = segYFor(aspect);
+      const gw = SEG_X + 1, gh = segY + 1;
+
+      // luminance grid: draw image into a (gw x gh) canvas -> one averaged sample per vertex
+      const lc = document.createElement('canvas');
+      lc.width = gw; lc.height = gh;
+      const lctx = lc.getContext('2d', { willReadFrequently: true });
+      lctx.imageSmoothingQuality = 'high'; // consistent area-averaging across browsers
+      lctx.drawImage(img, 0, 0, gw, gh);
+      const data = lctx.getImageData(0, 0, gw, gh).data;
+      const lum = new Float32Array(gw * gh);
+      // PlaneGeometry vertex row iy=0 is the TOP of the plane and, with the
+      // texture's default flipY, displays image row 0 (top). So sample the grid
+      // top-aligned (no vertical flip) to keep height aligned with the photo.
+      for (let y = 0; y < gh; y++) {
+        for (let x = 0; x < gw; x++) {
+          const idx = (y * gw + x) * 4;
+          lum[y * gw + x] = (data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114) / 255;
+        }
+      }
+
+      // display texture (capped to MAX_TEX, keeps aspect)
+      let tw = iw, th = ih;
+      if (Math.max(tw, th) > MAX_TEX) {
+        const s = MAX_TEX / Math.max(tw, th);
+        tw = Math.round(tw * s); th = Math.round(th * s);
+      }
+      const tc = document.createElement('canvas');
+      tc.width = tw; tc.height = th;
+      tc.getContext('2d').drawImage(img, 0, 0, tw, th);
+      const tex = new THREE.CanvasTexture(tc);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      if (currentTex) currentTex.dispose(); // free the previous image's GPU texture
+      currentTex = tex;
+      buildMesh(iw, ih, lum);
+      applyMaterialMode();
+      hideLoading();
+      setProcedural(false);
+    }
+
+    function loadImageSrc(src, onerror) {
+      const img = new Image();
+      img.onload = () => processImage(img);
+      img.onerror = onerror || (() => {});
+      img.src = src;
+    }
+
+    // procedural fallback: smooth grayscale dunes (license-free)
+    function makeProcedural() {
+      const w = 720, h = 405;
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      const id = ctx.createImageData(w, h);
+      const seeds = [];
+      for (let i = 0; i < 6; i++) seeds.push({ fx: 0.6 + i * 1.7, fy: 0.5 + i * 1.3, px: i * 1.1, py: i * 0.7, a: 1 / (i + 1) });
+      let max = 0; const buf = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const u = x / w, v = y / h; let s = 0;
+        for (const k of seeds) s += k.a * (Math.sin(u * 6.283 * k.fx + k.px) * Math.cos(v * 6.283 * k.fy + k.py));
+        const d = 1 - Math.hypot(u - 0.5, v - 0.5) * 1.4; // center bias
+        s = s * 0.5 + 0.5; s = s * 0.7 + Math.max(0, d) * 0.5;
+        buf[y * w + x] = s; if (s > max) max = s;
+      }
+      for (let i = 0; i < w * h; i++) {
+        const g = Math.round(Math.min(1, buf[i] / max) * 235 + 10);
+        id.data[i * 4] = g; id.data[i * 4 + 1] = g; id.data[i * 4 + 2] = Math.min(255, g + 6); id.data[i * 4 + 3] = 255;
+      }
+      ctx.putImageData(id, 0, 0);
+      return cv;
+    }
+    function loadProcedural() {
+      const cv = makeProcedural();
+      const img = new Image();
+      img.onload = () => { processImage(img); setProcedural(true); };
+      img.src = cv.toDataURL();
+    }
+
+    // ---------- UI wiring ----------
+    const $ = id => document.getElementById(id);
+    const loadingEl = $('loading');
+    let loadingHidden = false;
+    function hideLoading() { if (!loadingHidden) { loadingHidden = true; loadingEl.classList.add('hide'); } }
+
+    function setProcedural(on) {
+      $('drophint').style.display = on ? 'flex' : 'none';
+    }
+
+    function bindSlider(id, key, fmt, post) {
+      const el = $(id), out = $('v-' + id);
+      el.addEventListener('input', () => {
+        params[key] = parseFloat(el.value);
+        out.textContent = fmt(params[key]);
+        if (post) post();
+        needsRebuild = true;
+      });
+    }
+    bindSlider('height', 'height', v => v.toFixed(2));
+    bindSlider('smooth', 'smooth', v => String(v), () => computeBlur());
+    bindSlider('contrast', 'contrast', v => v.toFixed(2));
+    bindSlider('terrace', 'terrace', v => v < 2 ? 'off' : String(v));
+
+    function bindToggle(id, key, onChange) {
+      const el = $(id);
+      el.addEventListener('click', () => {
+        params[key] = !params[key];
+        el.classList.toggle('on', params[key]);
+        if (onChange) onChange();
+      });
+    }
+    bindToggle('t-invert', 'invert', () => { needsRebuild = true; });
+    bindToggle('t-material', 'stone', applyMaterialMode);
+    bindToggle('t-light', 'lightFollow');
+    bindToggle('t-rotate', 'autoRotate', () => { controls.autoRotate = params.autoRotate; });
+    controls.autoRotateSpeed = 0.8;
+
+    $('b-rise').addEventListener('click', () => { if (mesh) { rise = 0; rising = true; } });
+    $('b-file').addEventListener('click', () => $('file').click());
+    $('file').addEventListener('change', e => {
+      const f = e.target.files[0]; if (f) readFile(f);
+    });
+    function readFile(file) {
+      const fr = new FileReader();
+      fr.onload = () => loadImageSrc(fr.result);
+      fr.readAsDataURL(file);
+    }
+
+    // drag & drop
+    window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+    window.addEventListener('dragleave', e => { if (e.relatedTarget === null) document.body.classList.remove('dragging'); });
+    window.addEventListener('drop', e => {
+      e.preventDefault(); document.body.classList.remove('dragging');
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('image/')) readFile(f);
+    });
+    window.addEventListener('dragend', () => document.body.classList.remove('dragging')); // clear if drop aborted
+
+    // mouse -> light target
+    const mouse = new THREE.Vector2(0.25, 0.25);
+    window.addEventListener('pointermove', e => {
+      mouse.x = (e.clientX / innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+    });
+
+    // ---------- resize ----------
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // ---------- loop ----------
+    const clock = new THREE.Clock();
+    const lightTarget = new THREE.Vector3();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      if (params.lightFollow) {
+        // world-space reach of the mouse light, tuned to the PLANE_W=4 framing;
+        // z held in front (+2.6) so the light grazes the relief from the viewer side
+        lightTarget.set(mouse.x * 3.2, mouse.y * 2.4, 2.6);
+        keyLight.position.lerp(lightTarget, 0.08);
+      }
+
+      if (rising) {
+        rise += dt / RISE_DUR;
+        if (rise >= 1) { rise = 1; rising = false; }
+        rebuildHeights();
+      } else if (needsRebuild) {
+        needsRebuild = false;
+        rebuildHeights();
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // ---------- boot: try local default, else procedural ----------
+    loadImageSrc(DEFAULT_IMG, () => loadProcedural());
+
+    // safety: if texture never loads (e.g. very slow), reveal scene anyway
+    setTimeout(hideLoading, 6000);
+  </script>
+</body>
+</html>

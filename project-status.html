@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>プロジェクト状況 | Three.js Lab</title>
+  <style>
+    :root {
+      --bg: #0e0e10;
+      --panel: #16161a;
+      --panel-2: #1c1c22;
+      --border: #2a2a32;
+      --text: #e8e8ea;
+      --muted: #8a8a94;
+      --accent: #7cf;
+      --accent-2: #4488ff;
+      --green: #5cc98a;
+      --amber: #e0b341;
+      --red: #e06c75;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem 5rem; }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+      background:
+        radial-gradient(900px 400px at 80% -10%, rgba(68,136,255,0.16), transparent 60%),
+        radial-gradient(700px 300px at 10% 110%, rgba(119,204,255,0.10), transparent 60%);
+    }
+    .hero-inner {
+      max-width: 1080px; margin: 0 auto;
+      padding: 3.2rem 1.5rem 2.6rem;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 2rem; flex-wrap: wrap;
+    }
+    .hero-text { min-width: 280px; flex: 1; }
+    .eyebrow {
+      font-size: 0.72rem; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 0.7rem;
+    }
+    .hero h1 {
+      font-size: clamp(1.8rem, 4.5vw, 2.8rem); font-weight: 700;
+      letter-spacing: -0.01em; line-height: 1.1;
+    }
+    .hero h1 .dot { color: var(--accent-2); }
+    .hero p { color: var(--muted); margin-top: 0.8rem; font-size: 0.95rem; max-width: 46ch; }
+    .hero-links { margin-top: 1.3rem; display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.78rem; text-decoration: none; color: var(--text);
+      background: var(--panel); border: 1px solid var(--border);
+      padding: 0.4rem 0.8rem; border-radius: 999px; transition: border-color .2s, color .2s;
+    }
+    .pill:hover { border-color: var(--accent); color: var(--accent); }
+    .pill .ic { font-size: 0.9rem; }
+
+    #hero-canvas {
+      width: 220px; height: 220px; flex-shrink: 0;
+      filter: drop-shadow(0 8px 30px rgba(68,136,255,0.35));
+    }
+    @media (max-width: 620px) { #hero-canvas { width: 160px; height: 160px; } }
+
+    /* ---------- Status banner ---------- */
+    .banner {
+      margin-top: 2rem;
+      display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
+      background: var(--panel); border: 1px solid var(--border);
+      border-left: 3px solid var(--amber);
+      border-radius: 10px; padding: 0.9rem 1.1rem;
+      font-size: 0.86rem;
+    }
+    .banner .tag {
+      font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+      padding: 0.15rem 0.55rem; border-radius: 6px; white-space: nowrap;
+    }
+    .banner span { color: var(--muted); }
+    .banner b { color: var(--text); font-weight: 600; }
+
+    /* ---------- Sections ---------- */
+    section { margin-top: 3rem; }
+    .sec-head {
+      display: flex; align-items: baseline; gap: 0.7rem;
+      margin-bottom: 1.1rem; padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .sec-head h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.01em; }
+    .sec-head .num { color: var(--accent); font-size: 0.8rem; }
+    .sec-head .hint { margin-left: auto; color: var(--muted); font-size: 0.74rem; }
+
+    /* ---------- Metric cards ---------- */
+    .metrics {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.9rem;
+    }
+    .metric {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.1rem 1.2rem;
+    }
+    .metric .val { font-size: 2rem; font-weight: 700; color: var(--text); line-height: 1; }
+    .metric .val.accent { color: var(--accent); }
+    .metric .lbl { color: var(--muted); font-size: 0.76rem; margin-top: 0.45rem; }
+
+    /* ---------- Info grid ---------- */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+    @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.2rem 1.3rem;
+    }
+    .panel h3 { font-size: 0.82rem; color: var(--accent); margin-bottom: 0.9rem; letter-spacing: 0.03em; }
+    .kv { display: flex; justify-content: space-between; gap: 1rem; padding: 0.4rem 0; font-size: 0.84rem; border-bottom: 1px dashed var(--border); }
+    .kv:last-child { border-bottom: none; }
+    .kv .k { color: var(--muted); white-space: nowrap; }
+    .kv .v { color: var(--text); text-align: right; word-break: break-all; }
+    .kv .v a { color: var(--accent); text-decoration: none; }
+    .kv .v a:hover { text-decoration: underline; }
+
+    /* ---------- File tree ---------- */
+    .tree {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.2rem 1.3rem; font-size: 0.86rem;
+    }
+    .tree .row { display: flex; align-items: center; gap: 0.5rem; padding: 0.28rem 0; }
+    .tree .indent { padding-left: 1.6rem; }
+    .tree .fname { color: var(--text); }
+    .tree .fdesc { color: var(--muted); font-size: 0.78rem; margin-left: 0.4rem; }
+    .tree .badge-new {
+      font-size: 0.64rem; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+      padding: 0.05rem 0.4rem; border-radius: 5px; margin-left: 0.5rem;
+    }
+
+    /* ---------- Experiments table ---------- */
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    thead th {
+      text-align: left; color: var(--muted); font-weight: 600; font-size: 0.74rem;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border);
+    }
+    tbody td { padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background .15s; }
+    tbody tr:hover { background: var(--panel-2); }
+    .exp-id { color: var(--accent); font-weight: 700; }
+    .exp-file { color: var(--text); }
+    .exp-file a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--border); }
+    .exp-file a:hover { color: var(--accent); border-color: var(--accent); }
+    .status {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      font-size: 0.74rem; padding: 0.18rem 0.55rem; border-radius: 6px; white-space: nowrap;
+    }
+    .status.done { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+    .status.todo { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+    .status .led { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .tablewrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+
+    /* ---------- Roadmap ---------- */
+    .roadmap { list-style: none; display: flex; flex-direction: column; gap: 0.7rem; }
+    .roadmap li {
+      display: flex; gap: 0.85rem; align-items: flex-start;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 0.85rem 1.1rem; font-size: 0.88rem;
+    }
+    .roadmap .box {
+      flex-shrink: 0; width: 16px; height: 16px; margin-top: 0.18rem;
+      border: 1.5px solid var(--muted); border-radius: 4px;
+    }
+    .roadmap .txt { color: var(--text); }
+    .roadmap .txt small { display: block; color: var(--muted); font-size: 0.76rem; margin-top: 0.15rem; }
+
+    /* ---------- Flow ---------- */
+    .flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.82rem; }
+    .flow .step {
+      background: var(--panel-2); border: 1px solid var(--border);
+      padding: 0.5rem 0.85rem; border-radius: 8px; color: var(--text);
+    }
+    .flow .arrow { color: var(--accent); font-size: 1rem; }
+
+    /* ---------- Footer ---------- */
+    footer {
+      margin-top: 3.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);
+      color: var(--muted); font-size: 0.76rem;
+      display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;
+    }
+    code { background: var(--panel-2); border: 1px solid var(--border); padding: 0.1rem 0.4rem; border-radius: 5px; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+
+  <!-- ===== HERO ===== -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-text">
+        <div class="eyebrow">Project Status Report</div>
+        <h1>Three<span class="dot">.</span>js Lab</h1>
+        <p>Three.js を使ったビジュアル実験のプレイグラウンド。実験ごとに独立した HTML ファイルとして管理し、GitHub push → Vercel 自動デプロイで即公開する。</p>
+        <div class="hero-links">
+          <a class="pill" href="https://threejs-lab-ashen.vercel.app/" target="_blank" rel="noopener"><span class="ic">🌐</span> 公開サイト</a>
+          <a class="pill" href="https://github.com/ueyaman/threejs-lab" target="_blank" rel="noopener"><span class="ic">⌥</span> GitHub</a>
+          <a class="pill" href="index.html"><span class="ic">▦</span> 実験一覧</a>
+        </div>
+      </div>
+      <canvas id="hero-canvas"></canvas>
+    </div>
+  </header>
+
+  <div class="wrap">
+
+    <!-- ===== STATUS BANNER ===== -->
+    <div class="banner" style="border-left-color: var(--green)">
+      <span class="tag" style="color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent)">Active</span>
+      <span><b>実験 2 件</b>（01 公開済み / 02 ローカル完成）。02 はローカルコミット済み・<b style="color:var(--green)">明日ローカル確認 → push 予定</b>。</span>
+    </div>
+
+    <!-- ===== METRICS ===== -->
+    <section>
+      <div class="sec-head"><span class="num">01</span><h2>サマリー</h2><span class="hint">2026-06-09 時点</span></div>
+      <div class="metrics">
+        <div class="metric"><div class="val accent">2</div><div class="lbl">実験（01 / 02）</div></div>
+        <div class="metric"><div class="val">7</div><div class="lbl">HTML / MD ファイル</div></div>
+        <div class="metric"><div class="val">2</div><div class="lbl">Git コミット（ローカル）</div></div>
+        <div class="metric"><div class="val" style="color:var(--green)">Live</div><div class="lbl">Vercel（01 公開中）</div></div>
+      </div>
+    </section>
+
+    <!-- ===== OVERVIEW + STACK ===== -->
+    <section>
+      <div class="sec-head"><span class="num">02</span><h2>プロジェクト情報</h2></div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>BASICS</h3>
+          <div class="kv"><span class="k">目的</span><span class="v">Three.js 機能の実験・プロトタイプ</span></div>
+          <div class="kv"><span class="k">公開 URL</span><span class="v"><a href="https://threejs-lab-ashen.vercel.app/" target="_blank" rel="noopener">threejs-lab-ashen.vercel.app</a></span></div>
+          <div class="kv"><span class="k">リポジトリ</span><span class="v"><a href="https://github.com/ueyaman/threejs-lab" target="_blank" rel="noopener">ueyaman/threejs-lab</a></span></div>
+          <div class="kv"><span class="k">ブランチ</span><span class="v">master</span></div>
+          <div class="kv"><span class="k">最終コミット</span><span class="v">2026-06-09（ローカル）</span></div>
+          <div class="kv"><span class="k">未 push</span><span class="v">02 実験ほか（明日確認後）</span></div>
+        </div>
+        <div class="panel">
+          <h3>TECH STACK</h3>
+          <div class="kv"><span class="k">ライブラリ</span><span class="v">Three.js 0.170.0</span></div>
+          <div class="kv"><span class="k">読み込み</span><span class="v">CDN / importmap (jsDelivr)</span></div>
+          <div class="kv"><span class="k">ビルド</span><span class="v">なし（ブラウザ直接実行）</span></div>
+          <div class="kv"><span class="k">ホスティング</span><span class="v">Vercel（自動デプロイ）</span></div>
+          <div class="kv"><span class="k">命名規則</span><span class="v"><code>NN-kebab-case.html</code></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== FILE STRUCTURE ===== -->
+    <section>
+      <div class="sec-head"><span class="num">03</span><h2>構成</h2></div>
+      <div class="tree">
+        <div class="row"><span>📁</span><span class="fname">threejs-lab/</span></div>
+        <div class="row indent"><span>📄</span><span class="fname">index.html</span><span class="fdesc">— 実験一覧（カード形式ポータル）</span></div>
+        <div class="row indent"><span>🧊</span><span class="fname">01-rotating-cube.html</span><span class="fdesc">— 基本: 回転するキューブ</span></div>
+        <div class="row indent"><span>🗿</span><span class="fname">02-photo-terrain.html</span><span class="fdesc">— 画像地形化（明暗→高さのレリーフ）</span><span class="badge-new">新規</span></div>
+        <div class="row indent"><span>🖼️</span><span class="fname">assets/02-portrait.jpg</span><span class="fdesc">— 02 の初期画像（原寸・ローカルのみ）</span><span class="badge-new" style="color:var(--muted);border-color:var(--border)">gitignore</span></div>
+        <div class="row indent"><span>💡</span><span class="fname">docs/260609/draftIdea.md</span><span class="fdesc">— 02 の企画メモ（ChatGPT 由来）</span></div>
+        <div class="row indent"><span>📚</span><span class="fname">tasks/lessons.md</span><span class="fdesc">— 実装で得た再利用可能な教訓</span><span class="badge-new">新規</span></div>
+        <div class="row indent"><span>📊</span><span class="fname">project-status.html</span><span class="fdesc">— このステータス資料</span></div>
+        <div class="row indent"><span>📝</span><span class="fname">README.md</span><span class="fdesc">— プロジェクト説明（ローカル実行手順あり）</span></div>
+        <div class="row indent"><span>🚫</span><span class="fname">.gitignore</span><span class="fdesc">— ライセンス素材・作業ゴミを除外</span><span class="badge-new">新規</span></div>
+      </div>
+    </section>
+
+    <!-- ===== EXPERIMENTS ===== -->
+    <section>
+      <div class="sec-head"><span class="num">04</span><h2>実験一覧</h2><span class="hint">2 / 2 完成</span></div>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th style="width:48px">#</th><th>ファイル</th><th>内容</th><th style="width:110px">状態</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="exp-id">01</td>
+              <td class="exp-file"><a href="01-rotating-cube.html">01-rotating-cube.html</a></td>
+              <td>回転するキューブ（MeshStandard + Ambient/Point ライト）</td>
+              <td><span class="status done"><span class="led"></span>完成</span></td>
+            </tr>
+            <tr>
+              <td class="exp-id">02</td>
+              <td class="exp-file"><a href="02-photo-terrain.html">02-photo-terrain.html</a></td>
+              <td>画像地形化 — 明暗を高さにした 3D レリーフ。マウス追従ライト / OrbitControls / 画像 D&amp;D / プロシージャル fallback</td>
+              <td><span class="status done"><span class="led"></span>完成（ローカル）</span></td>
+            </tr>
+            <tr>
+              <td class="exp-id">03</td>
+              <td class="exp-file" style="color:var(--muted)">— 未着手 —</td>
+              <td style="color:var(--muted)">パーティクル分解 / シェーダー波形 / 物理 など（テーマ未定）</td>
+              <td><span class="status todo"><span class="led"></span>予定</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== WORKFLOW ===== -->
+    <section>
+      <div class="sec-head"><span class="num">05</span><h2>デプロイフロー</h2></div>
+      <div class="panel">
+        <div class="flow">
+          <span class="step">① 新実験 HTML を作成</span>
+          <span class="arrow">→</span>
+          <span class="step">② index.html にカード追記</span>
+          <span class="arrow">→</span>
+          <span class="step">③ <code>git push</code></span>
+          <span class="arrow">→</span>
+          <span class="step" style="border-color:var(--green);color:var(--green)">④ Vercel 自動デプロイ</span>
+        </div>
+        <div style="margin-top:0.9rem;font-size:0.78rem;color:#9a9aa4">
+          ローカル確認: <code>py -m http.server 8000</code> →
+          <code>http://127.0.0.1:8000/</code>（importmap と canvas 読取のため <code>file://</code> 直開きは不可）
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ROADMAP ===== -->
+    <section>
+      <div class="sec-head"><span class="num">06</span><h2>次にやること</h2></div>
+      <ul class="roadmap">
+        <li>
+          <span class="box" style="border-color:var(--green)"></span>
+          <span class="txt"><b style="color:var(--green)">【明日】02 をローカルで確認</b><small><code>py -m http.server 8000</code> → <code>http://127.0.0.1:8000/02-photo-terrain.html</code>。マウスでライト探索・ドラッグで回転・画像 D&amp;D を確認。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">確認 OK なら <code>git push</code> → Vercel 公開<small>公開版は原寸画像なし（gitignore）＝プロシージャル地形にフォールバック。<code>docs/draftIdea.md</code> を公開するか push 前に判断。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">03 の実験テーマを決めて追加<small>パーティクル分解 / シェーダー波形 / 物理シミュレーションなど。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">02 改良案<small>高さマップ用ぼかしを表示テクスチャと分離 / 等高線オーバーレイ / スクロール連動の立ち上がり。詳細は <code>tasks/lessons.md</code> 参照。</small></span>
+        </li>
+      </ul>
+    </section>
+
+    <footer>
+      <span>Three.js Lab — Project Status Report</span>
+      <span>更新: 2026-06-09（実験 02 追加時点）</span>
+    </footer>
+  </div>
+
+  <!-- ===== Live Three.js hero cube (01-rotating-cube の縮小版) ===== -->
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    const canvas = document.getElementById('hero-canvas');
+    const size = () => Math.min(canvas.clientWidth, canvas.clientHeight) || 220;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.z = 3.4;
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+    const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+    const material = new THREE.MeshStandardMaterial({ color: 0x4488ff, roughness: 0.3, metalness: 0.5 });
+    const cube = new THREE.Mesh(geometry, material);
+    scene.add(cube);
+
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: 0x7ccfff, transparent: true, opacity: 0.5 })
+    );
+    cube.add(edges);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    const point = new THREE.PointLight(0xffffff, 2.4, 30);
+    point.position.set(3, 4, 3);
+    scene.add(point);
+
+    function resize() {
+      const s = size();
+      renderer.setSize(s, s, false);
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      cube.rotation.x += 0.005;
+      cube.rotation.y += 0.01;
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>

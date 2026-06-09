@@ -1,0 +1,10 @@
+# Licensed stock assets — do NOT commit to this PUBLIC repo (Adobe Stock license).
+# Used locally by 02-photo-terrain.html; the public demo falls back to a
+# procedural texture + drag-and-drop upload, so no licensed file is redistributed.
+docs/**/AdobeStock_*.jpeg
+docs/**/AdobeStock_*.jpg
+assets/02-portrait.jpg
+
+# Verification / tooling artifacts
+.playwright-mcp/
+*.local.png
