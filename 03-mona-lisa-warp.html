@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 - Mona Lisa Warp | Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root { --accent: #d8b86a; --border: #2a2a32; }
+    html, body { height: 100%; }
+    body { background: #0c0b09; overflow: hidden; font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: #e8e3d8; }
+    canvas { display: block; cursor: crosshair; }
+
+    #back {
+      position: fixed; top: 1rem; left: 1rem; z-index: 10;
+      color: var(--accent); font-size: 0.85rem; text-decoration: none;
+      background: rgba(0,0,0,0.5); padding: 0.3rem 0.6rem;
+      border-radius: 4px; border: 1px solid var(--border);
+    }
+    #back:hover { border-color: var(--accent); }
+
+    #caption {
+      position: fixed; bottom: 1rem; left: 1rem; z-index: 10;
+      font-size: 0.75rem; color: #9a9488; line-height: 1.5;
+      background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem;
+      border-radius: 6px; border: 1px solid var(--border); max-width: 64vw;
+    }
+    #caption b { color: var(--accent); font-weight: 600; }
+
+    #panel {
+      position: fixed; top: 1rem; right: 1rem; z-index: 10;
+      width: 226px; background: rgba(16,14,10,0.82);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.85rem 0.95rem; backdrop-filter: blur(8px);
+      font-size: 0.74rem;
+    }
+    #panel h2 {
+      font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 0.7rem; font-weight: 700;
+    }
+    .ctrl { margin-bottom: 0.62rem; }
+    .ctrl label { display: flex; align-items: center; justify-content: space-between; color: #b8b2a4; margin-bottom: 0.28rem; }
+    .ctrl label .num {
+      width: 58px; text-align: right; color: #e8e3d8;
+      background: #16140f; border: 1px solid var(--border); border-radius: 5px;
+      font-family: inherit; font-size: 0.72rem; padding: 0.12rem 0.36rem;
+      -moz-appearance: textfield;
+    }
+    .ctrl label .num::-webkit-outer-spin-button,
+    .ctrl label .num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .ctrl label .num:focus { outline: none; border-color: var(--accent); }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none; width: 100%; height: 3px;
+      background: #38342c; border-radius: 2px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 13px; height: 13px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+      border: 2px solid #0c0b09;
+    }
+    .row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .toggle, .btn {
+      flex: 1; min-width: 64px; text-align: center; cursor: pointer; user-select: none;
+      font-size: 0.7rem; padding: 0.35rem 0.3rem; border-radius: 6px;
+      border: 1px solid var(--border); background: #16140f; color: #b8b2a4;
+      transition: all .15s;
+    }
+    .toggle:hover, .btn:hover { border-color: var(--accent); color: #e8e3d8; }
+    .toggle.on { background: rgba(216,184,106,0.16); border-color: var(--accent); color: var(--accent); }
+    .sep { height: 1px; background: var(--border); margin: 0.7rem 0; }
+    .file-hint { color: #756f62; font-size: 0.68rem; margin-top: 0.4rem; line-height: 1.4; }
+
+    body.dragging::after {
+      content: ""; position: fixed; inset: 0; z-index: 4;
+      border: 2px dashed var(--accent); margin: 0.6rem; border-radius: 12px;
+      background: rgba(216,184,106,0.05); pointer-events: none;
+    }
+    #loading {
+      position: fixed; inset: 0; z-index: 20; display: flex;
+      align-items: center; justify-content: center; background: #0c0b09;
+      color: #9a9488; font-size: 0.85rem; transition: opacity .5s; letter-spacing: 0.05em;
+    }
+    #loading.hide { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <a id="back" href="index.html">← 一覧へ</a>
+
+  <div id="caption">
+    <b>03 · Mona Lisa Warp</b> — 画像をマウスで引きずって歪ませる<br>
+    カーソルを動かすと絵がぐにゃぐにゃ伸び、止めるとバネで揺れ戻る。中村勇吾(tha)の Flash 作品へのオマージュ。画像をドロップで差し替え可。
+  </div>
+
+  <div id="panel">
+    <h2>Controls</h2>
+    <div class="ctrl">
+      <label>引きずる強さ <input class="num" type="number" id="v-pull" min="0" max="3" step="0.05" value="1.00"></label>
+      <input type="range" id="pull" min="0" max="3" step="0.05" value="1.0">
+    </div>
+    <div class="ctrl">
+      <label>影響半径 <input class="num" type="number" id="v-radius" min="0.1" max="2" step="0.01" value="0.95"></label>
+      <input type="range" id="radius" min="0.1" max="2" step="0.01" value="0.95">
+    </div>
+    <div class="ctrl">
+      <label>バネの戻り <input class="num" type="number" id="v-stiff" min="0.5" max="12" step="0.1" value="2.2"></label>
+      <input type="range" id="stiff" min="0.5" max="12" step="0.1" value="2.2">
+    </div>
+    <div class="ctrl">
+      <label>揺れの余韻 <input class="num" type="number" id="v-damp" min="0.5" max="0.98" step="0.01" value="0.91"></label>
+      <input type="range" id="damp" min="0.5" max="0.98" step="0.01" value="0.91">
+    </div>
+    <div class="row">
+      <div class="toggle" id="t-grid">グリッド表示</div>
+      <div class="btn" id="b-reset">ぷるんと戻す</div>
+    </div>
+    <div class="sep"></div>
+    <div class="row">
+      <div class="btn" id="b-file">画像を選ぶ</div>
+    </div>
+    <div class="file-hint">モナリザはパブリックドメイン。手元の画像をドロップしても歪ませられます。</div>
+    <input type="file" id="file" accept="image/*" style="display:none">
+  </div>
+
+  <div id="loading">loading…</div>
+
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ---------- config ----------
+    const SEG_X = 36;            // grid columns; rows derived from image aspect
+    const MAX_SEG_Y = 200;       // clamp rows for pathological aspect ratios
+    const VIEW_H = 3.4;          // world height the image is fit to (fills viewport height-ish)
+    const MAX_TEX = 2048;        // display-texture dimension cap
+    const DEFAULT_IMG = 'assets/03-mona-lisa.jpg'; // public-domain, committed to the repo
+
+    const params = {
+      pull: 1.0,      // how strongly pointer motion drags nearby vertices
+      radius: 0.95,   // world-space falloff radius of the pointer's influence
+      stiff: 2.2,     // spring constant pulling each vertex home (low = gooey)
+      damp: 0.91,     // per-frame velocity retention (high = long jiggle/overshoot)
+      grid: false,
+    };
+
+    // ---------- scene ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0c0b09);
+
+    // Orthographic: this is a flat 2D warp, no perspective. Frustum tracks aspect.
+    let camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    camera.position.z = 5;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // ---------- mesh (rebuilt per image) ----------
+    let geometry = null, mesh = null, gridLines = null;
+    let currentTex = null;
+    let gridW = 0, gridH = 0, vCount = 0;
+    let home = null;             // Float32Array xy*vCount — rest positions
+    let vel = null;              // Float32Array xy*vCount — per-vertex velocity
+    let planeW = 2, planeH = 2;
+    let gridIndexPairs = null;   // cached grid edge index list (invalidated per rebuild)
+
+    const material = new THREE.MeshBasicMaterial({ map: null, side: THREE.DoubleSide });
+
+    const segYFor = aspect => Math.min(MAX_SEG_Y, Math.max(1, Math.round(SEG_X * aspect)));
+
+    function disposeMesh() {
+      if (mesh) { scene.remove(mesh); geometry.dispose(); mesh = null; }
+      if (gridLines) { scene.remove(gridLines); gridLines.geometry.dispose(); gridLines.material.dispose(); gridLines = null; }
+      // The grid edge-index cache is tied to gridW/gridH; a new image may have a
+      // different grid, so invalidate it here. Without this, syncGrid() indexes the
+      // new (smaller) position buffer with stale indices → silently corrupt overlay.
+      gridIndexPairs = null;
+    }
+
+    function buildMesh(imgW, imgH, tex) {
+      disposeMesh();
+      const aspect = imgH / imgW;
+      planeH = VIEW_H;
+      planeW = VIEW_H / aspect;
+      const segY = segYFor(aspect);
+      geometry = new THREE.PlaneGeometry(planeW, planeH, SEG_X, segY);
+      gridW = SEG_X + 1; gridH = segY + 1; vCount = gridW * gridH;
+
+      // snapshot rest positions; reset velocity
+      const pos = geometry.attributes.position;
+      home = new Float32Array(vCount * 2);
+      vel = new Float32Array(vCount * 2);
+      for (let i = 0; i < vCount; i++) {
+        home[i * 2] = pos.getX(i);
+        home[i * 2 + 1] = pos.getY(i);
+      }
+
+      material.map = tex;
+      material.needsUpdate = true;
+      mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+
+      buildGrid();
+      gridLines.visible = params.grid;
+    }
+
+    // wireframe overlay so the warp grid is visible when toggled
+    function buildGrid() {
+      const wire = new THREE.WireframeGeometry(geometry);
+      const mat = new THREE.LineBasicMaterial({ color: 0xd8b86a, transparent: true, opacity: 0.28 });
+      gridLines = new THREE.LineSegments(wire, mat);
+      mesh.add(gridLines); // child of mesh: shares the warped vertices? No — see syncGrid.
+    }
+
+    // ---------- image -> texture ----------
+    function processImage(img) {
+      const iw = img.width, ih = img.height;
+      if (!iw || !ih) { hideLoading(); return; }
+      let tw = iw, th = ih;
+      if (Math.max(tw, th) > MAX_TEX) {
+        const s = MAX_TEX / Math.max(tw, th);
+        tw = Math.round(tw * s); th = Math.round(th * s);
+      }
+      const c = document.createElement('canvas');
+      c.width = tw; c.height = th;
+      c.getContext('2d').drawImage(img, 0, 0, tw, th);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      if (currentTex) {
+        const old = currentTex.image;
+        currentTex.dispose();
+        if (old && 'width' in old) { old.width = 0; old.height = 0; }
+      }
+      currentTex = tex;
+      buildMesh(iw, ih, tex);
+      fitCamera();
+      hideLoading();
+    }
+
+    function loadImageSrc(src, onerror) {
+      const img = new Image();
+      img.onload = () => processImage(img);
+      img.onerror = onerror || (() => {});
+      img.src = src;
+    }
+
+    // procedural fallback (only if the committed image somehow 404s): a soft gradient
+    function loadFallback() {
+      const w = 480, h = 700;
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#6b5a3a'); g.addColorStop(0.5, '#caa86a'); g.addColorStop(1, '#3a3022');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(20,16,10,0.65)'; ctx.font = 'bold 40px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('drop an image', w / 2, h / 2);
+      const img = new Image();
+      img.onload = () => processImage(img);
+      img.src = cv.toDataURL();
+    }
+
+    // ---------- camera fit (height-based, like the relief width-fit but vertical) ----------
+    function fitCamera() {
+      const aspect = innerWidth / innerHeight;
+      // Fit the image height into the view, add a little margin.
+      const halfH = planeH / 2 * 1.08;
+      const halfW = halfH * aspect;
+      camera.left = -halfW; camera.right = halfW;
+      camera.top = halfH; camera.bottom = -halfH;
+      camera.updateProjectionMatrix();
+    }
+
+    // ---------- pointer ----------
+    // Track the pointer in WORLD space and the motion delta between frames.
+    const ptr = new THREE.Vector2(0, 0);     // current world pos
+    const ptrPrev = new THREE.Vector2(0, 0);
+    const ptrVel = new THREE.Vector2(0, 0);   // world-space motion this frame
+    let ptrActive = false, ptrInit = false;
+
+    function screenToWorld(clientX, clientY) {
+      // Map screen → the camera's frustum bounds. General form (handles an
+      // asymmetric/offset frustum) rather than assuming left=-right, bottom=-top.
+      const u = clientX / innerWidth, v = clientY / innerHeight;
+      return {
+        x: camera.left + u * (camera.right - camera.left),
+        y: camera.top - v * (camera.top - camera.bottom),
+      };
+    }
+    window.addEventListener('pointermove', e => {
+      const w = screenToWorld(e.clientX, e.clientY);
+      ptr.set(w.x, w.y);
+      // On the first move, or the first move after the pointer re-enters, sync prev
+      // to the current spot so ptrVel doesn't register the jump across the gap as a
+      // (phantom) drag the user never made.
+      if (!ptrInit) { ptrPrev.copy(ptr); ptrInit = true; }
+      ptrActive = true;
+    });
+    window.addEventListener('pointerleave', () => { ptrActive = false; ptrInit = false; });
+
+    // ---------- UI wiring ----------
+    const $ = id => document.getElementById(id);
+    const loadingEl = $('loading');
+    let loadingHidden = false;
+    function hideLoading() { if (!loadingHidden) { loadingHidden = true; loadingEl.classList.add('hide'); } }
+
+    function bindSlider(id, key, fmt) {
+      const slider = $(id), num = $('v-' + id);
+      const lo = parseFloat(slider.min), hi = parseFloat(slider.max);
+      const clamp = v => v < lo ? lo : v > hi ? hi : v;
+      const apply = (raw, fromNum) => {
+        let v = parseFloat(raw);
+        if (!isFinite(v)) return;
+        const c = clamp(v);
+        params[key] = c;
+        slider.value = c;
+        if (!fromNum || c !== v) num.value = fmt(c);
+      };
+      slider.addEventListener('input', () => apply(slider.value, false));
+      num.addEventListener('input', () => apply(num.value, true));
+      const normalise = () => { num.value = fmt(params[key]); };
+      num.addEventListener('change', normalise);
+      num.addEventListener('blur', normalise);
+    }
+    bindSlider('pull', 'pull', v => v.toFixed(2));
+    bindSlider('radius', 'radius', v => v.toFixed(2));
+    bindSlider('stiff', 'stiff', v => v.toFixed(1));
+    bindSlider('damp', 'damp', v => v.toFixed(2));
+
+    $('t-grid').addEventListener('click', () => {
+      params.grid = !params.grid;
+      $('t-grid').classList.toggle('on', params.grid);
+      if (gridLines) gridLines.visible = params.grid;
+    });
+
+    // "ぷるんと戻す": pluck the whole sheet so it wobbles and springs back to rest.
+    // Kick each vertex by its CURRENT displacement from home (amplifies whatever
+    // warp is present into an overshoot) plus a small random jitter so a sheet that
+    // is already at rest still gets a lively, even pluck rather than nothing.
+    $('b-reset').addEventListener('click', () => {
+      if (!vel || !mesh) return;
+      const pos = geometry.attributes.position;
+      for (let i = 0; i < vCount; i++) {
+        const ix = i * 2, iy = i * 2 + 1;
+        const offx = pos.getX(i) - home[ix], offy = pos.getY(i) - home[iy];
+        vel[ix] += offx * 1.2 + (Math.random() - 0.5) * 0.06;
+        vel[iy] += offy * 1.2 + (Math.random() - 0.5) * 0.06;
+      }
+    });
+
+    $('b-file').addEventListener('click', () => $('file').click());
+    $('file').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f); });
+    function readFile(file) {
+      const fr = new FileReader();
+      fr.onload = () => loadImageSrc(fr.result);
+      fr.readAsDataURL(file);
+    }
+
+    // drag & drop
+    window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+    window.addEventListener('dragleave', e => { if (e.relatedTarget === null) document.body.classList.remove('dragging'); });
+    window.addEventListener('drop', e => {
+      e.preventDefault(); document.body.classList.remove('dragging');
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('image/')) readFile(f);
+    });
+    window.addEventListener('dragend', () => document.body.classList.remove('dragging'));
+
+    // ---------- resize ----------
+    window.addEventListener('resize', () => {
+      renderer.setSize(innerWidth, innerHeight);
+      fitCamera();
+    });
+
+    // ---------- spring simulation ----------
+    // Each grid vertex is a mass on a spring to its home position. Pointer motion
+    // injects velocity into vertices within `radius`, weighted by a smooth falloff
+    // AND by how fast the pointer is moving — so the image is "dragged" by the
+    // cursor and then springs/jiggles back when it stops. This is the core of the
+    // 中村勇吾 Flash feel: viscous follow + decaying overshoot.
+    function simulate(dt) {
+      if (!mesh) return;
+      const pos = geometry.attributes.position;
+      const k = params.stiff;
+      const damp = params.damp;
+      const rad = params.radius;
+      const rad2 = rad * rad;
+
+      // pointer motion this frame (world units).
+      ptrVel.set(ptr.x - ptrPrev.x, ptr.y - ptrPrev.y);
+      ptrPrev.copy(ptr);
+      const moving = ptrActive && (ptrVel.lengthSq() > 1e-8);
+
+      // Frame-rate compensated damping factor.
+      const d = Math.pow(damp, dt * 60);
+
+      for (let i = 0; i < vCount; i++) {
+        const ix = i * 2, iy = i * 2 + 1;
+        let x = pos.getX(i), y = pos.getY(i);
+        let vx = vel[ix], vy = vel[iy];
+
+        // spring toward home — low stiffness makes the drag feel gooey/viscous
+        const hx = home[ix], hy = home[iy];
+        vx += (hx - x) * k * dt;
+        vy += (hy - y) * k * dt;
+
+        // damping first, so the spring + jiggle decays into a long overshoot
+        vx *= d; vy *= d;
+
+        x += vx; y += vy;
+
+        // Pointer DRAG: vertices inside the radius are pulled toward where the
+        // cursor is heading — applied as a positional drag (not just a velocity
+        // nudge) so the image visibly sticks to and stretches after the cursor,
+        // then the spring/overshoot above reels it back when the cursor stops.
+        if (moving) {
+          const dx = x - ptr.x, dy = y - ptr.y;
+          const dd = Math.sqrt(dx * dx + dy * dy);
+          if (dd < rad) {
+            const f = 1 - dd / rad;          // 1 at cursor -> 0 at edge
+            const w = f * f * (3 - 2 * f);   // smoothstep — broad, soft shoulder
+            const drag = w * params.pull;
+            // move the vertex a fraction of the pointer's travel this frame
+            x += ptrVel.x * drag;
+            y += ptrVel.y * drag;
+            // and bank some of that into velocity so it overshoots on release
+            vx += ptrVel.x * drag * 0.6;
+            vy += ptrVel.y * drag * 0.6;
+          }
+        }
+
+        vel[ix] = vx; vel[iy] = vy;
+        pos.setX(i, x); pos.setY(i, y);
+      }
+      pos.needsUpdate = true;
+
+      // the wireframe child shares geometry attributes? WireframeGeometry copies
+      // positions at build time, so rebuild its positions from the live geometry.
+      syncGrid();
+    }
+
+    // WireframeGeometry is a static snapshot; refresh its line endpoints from the
+    // warped plane each frame so the grid overlay tracks the distortion.
+    function syncGrid() {
+      if (!gridLines || !gridLines.visible) return;
+      const src = geometry.attributes.position;
+      const dst = gridLines.geometry.attributes.position;
+      // WireframeGeometry stores 2 verts per edge; rebuild from plane grid indices.
+      if (!gridIndexPairs) buildGridIndex();
+      let o = 0;
+      for (let e = 0; e < gridIndexPairs.length; e += 2) {
+        const a = gridIndexPairs[e], b = gridIndexPairs[e + 1];
+        dst.setXYZ(o++, src.getX(a), src.getY(a), 0);
+        dst.setXYZ(o++, src.getX(b), src.getY(b), 0);
+      }
+      dst.needsUpdate = true;
+    }
+    // Build edge list (horizontal + vertical) over the SEG grid once.
+    function buildGridIndex() {
+      const pairs = [];
+      const idx = (cx, cy) => cy * gridW + cx;
+      for (let cy = 0; cy < gridH; cy++) {
+        for (let cx = 0; cx < gridW; cx++) {
+          if (cx + 1 < gridW) { pairs.push(idx(cx, cy), idx(cx + 1, cy)); }
+          if (cy + 1 < gridH) { pairs.push(idx(cx, cy), idx(cx, cy + 1)); }
+        }
+      }
+      gridIndexPairs = pairs;
+      // resize the line geometry to match our edge count
+      const arr = new Float32Array(pairs.length * 3);
+      gridLines.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+      gridLines.geometry.setDrawRange(0, pairs.length);
+    }
+
+    // ---------- loop ----------
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.033);
+      simulate(dt);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // ---------- boot ----------
+    fitCamera();
+    loadImageSrc(DEFAULT_IMG, () => loadFallback());
+    setTimeout(hideLoading, 6000);
+  </script>
+</body>
+</html>

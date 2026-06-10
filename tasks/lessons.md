@@ -53,3 +53,29 @@
   公開デモではメモリスパイクの原因。dispose 後に `canvas.width = canvas.height = 0`
   で backing store を即解放する。[[texture-dispose]] の続き。
 - 出典: Code Reviewer の指摘（Major #3）。
+
+## 2026-06-10 — 03-mona-lisa-warp（マウスドラッグ歪み）
+
+### 「引きずって粘る」質感は速度注入だけでは出ない＝位置ドラッグ＋低剛性バネ
+- マウス移動を頂点「速度」に積分注入するだけだと、止めた瞬間バネが素直に戻るだけで
+  中村勇吾作品の「カーソルに粘着して伸びる」感が出ない（最大変位が画像幅の1/4程度で
+  地味）。対策: ポインタ近傍頂点を**毎フレーム位置ごとカーソル進行方向へドラッグ**
+  （`x += ptrVel.x * w`）＋一部を速度に banking してオーバーシュート。剛性を下げ
+  （stiff 4→2.2）減衰を上げる（damp 0.86→0.91）と、粘り＋ぷるぷる余韻が両立。
+- 数値で確認: 変位が 0.63→2.10（planeW=2.28 相当）に増、止めると振動しながら0へ収束。
+
+### キャッシュした派生データは「リビルドの起点」で必ず無効化する
+- グリッド辺インデックスを `let cache = null; if(!cache) build()` で遅延生成したが、
+  画像差し替え（buildMesh）で `cache=null` リセットを忘れ、**別アスペクト画像をD&D
+  すると旧グリッドの index で新しい（小さい）頂点配列を範囲外アクセス → NaN/破損**。
+  Three.js の `getX(i)`/`setXYZ` は範囲外でも例外を出さず**サイレント破損**するので
+  気づきにくい。対策: `disposeMesh()`（リビルドの単一起点）で `cache=null`。
+- **検証の盲点**: 同じアスペクト比の画像でしかD&Dを試さないと一生再現しない。
+  派生キャッシュを持つUIは「形の違う入力」で必ずテストする。
+- 出典: Code Reviewer の指摘（Critical）。レビュー無しなら確実に本番に出ていた。
+
+### パブリックドメイン画像は本番同梱できる（ライセンス素材と扱いを分ける）
+- モナリザ等 PD 画像は Wikimedia Commons から取得しリポジトリ同梱可（02 の Adobe Stock
+  とは逆で gitignore 不要）。Wikimedia は任意サイズの thumbnail 生成を制限しているので、
+  Commons API（`action=query&prop=imageinfo&iiurlwidth=N`）で**許可済み thumburl を取得**
+  してから落とす（直 URL で 600px 等を叩くと 400 "Use thumbnail sizes listed"）。
