@@ -94,12 +94,12 @@
   <div id="panel">
     <h2>Controls</h2>
     <div class="ctrl">
-      <label>引きずる強さ <input class="num" type="number" id="v-pull" min="0" max="3" step="0.05" value="1.00"></label>
-      <input type="range" id="pull" min="0" max="3" step="0.05" value="1.0">
+      <label>引きずる強さ <input class="num" type="number" id="v-pull" min="0" max="3" step="0.05" value="0.50"></label>
+      <input type="range" id="pull" min="0" max="3" step="0.05" value="0.5">
     </div>
     <div class="ctrl">
-      <label>影響半径 <input class="num" type="number" id="v-radius" min="0.1" max="2" step="0.01" value="0.95"></label>
-      <input type="range" id="radius" min="0.1" max="2" step="0.01" value="0.95">
+      <label>影響半径 <input class="num" type="number" id="v-radius" min="0.1" max="2" step="0.01" value="0.50"></label>
+      <input type="range" id="radius" min="0.1" max="2" step="0.01" value="0.5">
     </div>
     <div class="ctrl">
       <label>バネの戻り <input class="num" type="number" id="v-stiff" min="0.5" max="12" step="0.1" value="2.2"></label>
@@ -137,8 +137,8 @@
     const DEFAULT_IMG = 'assets/03-mona-lisa.jpg'; // public-domain, committed to the repo
 
     const params = {
-      pull: 1.0,      // how strongly pointer motion drags nearby vertices
-      radius: 0.95,   // world-space falloff radius of the pointer's influence
+      pull: 0.5,      // how strongly pointer motion drags nearby vertices
+      radius: 0.5,    // world-space falloff radius of the pointer's influence
       stiff: 2.2,     // spring constant pulling each vertex home (low = gooey)
       damp: 0.91,     // per-frame velocity retention (high = long jiggle/overshoot)
       grid: false,
