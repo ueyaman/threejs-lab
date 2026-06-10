@@ -160,7 +160,7 @@
     const SEG_X = 280;          // plane subdivisions (width); height derived from image aspect
     const PLANE_W = 4.0;        // world width of the relief
     const MAX_TEX = 4096;       // cap display-texture dimension (GPU-safe; visually full quality)
-    const RISE_DUR = 3.2;       // seconds for the flat->relief animation (slow, "じんわり")
+    const RISE_DUR = 3.0;       // seconds for the flat->relief animation (slow, "じんわり")
     const DEFAULT_IMG = 'assets/02-portrait.jpg'; // local default (gitignored); 404s on public demo
 
     // ---------- scene ----------
@@ -528,10 +528,12 @@
       const dt = Math.min(clock.getDelta(), 0.05);
 
       // Auto-sway: orbit the camera a little left/right of dead-center so the relief
-      // reads as 3D, but stay near the front so the face is always legible. Pauses
-      // while the user is dragging and resumes when released. The toggle is the
-      // single source of truth for whether it runs.
-      if (params.autoRotate && !isDragging) {
+      // reads as 3D, but stay near the front so the face is always legible. Held off
+      // until the 0->0.3 rise finishes (!rising) so the "じんわり立ち上がる" moment
+      // plays head-on; pauses while the user is dragging; resumes when released. The
+      // toggle is the single source of truth for whether it runs. swayT starts at 0
+      // so motion eases out from dead-center (sin(0)=0) right after the rise.
+      if (params.autoRotate && !isDragging && !rising) {
         swayT += dt;
         const ang = Math.sin(swayT * 0.5) * (SWAY_DEG * Math.PI / 180);
         // Keep whatever radius the camera currently has (respects any prior zoom)
