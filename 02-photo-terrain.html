@@ -42,8 +42,16 @@
       color: var(--accent); margin-bottom: 0.7rem; font-weight: 700;
     }
     .ctrl { margin-bottom: 0.65rem; }
-    .ctrl label { display: flex; justify-content: space-between; color: #b8b8c0; margin-bottom: 0.22rem; }
-    .ctrl label .v { color: #e8e8ea; }
+    .ctrl label { display: flex; align-items: center; justify-content: space-between; color: #b8b8c0; margin-bottom: 0.28rem; }
+    .ctrl label .num {
+      width: 58px; text-align: right; color: #e8e8ea;
+      background: #16161c; border: 1px solid var(--border); border-radius: 5px;
+      font-family: inherit; font-size: 0.72rem; padding: 0.12rem 0.36rem;
+      -moz-appearance: textfield;
+    }
+    .ctrl label .num::-webkit-outer-spin-button,
+    .ctrl label .num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .ctrl label .num:focus { outline: none; border-color: var(--accent); }
     input[type=range] {
       -webkit-appearance: none; appearance: none; width: 100%; height: 3px;
       background: #34343c; border-radius: 2px; outline: none;
@@ -97,19 +105,19 @@
   <div id="panel">
     <h2>Controls</h2>
     <div class="ctrl">
-      <label>高さ <span class="v" id="v-height">0.90</span></label>
-      <input type="range" id="height" min="0" max="2.5" step="0.01" value="0.9">
+      <label>高さ <input class="num" type="number" id="v-height" min="0" max="2.5" step="0.01" value="0.30"></label>
+      <input type="range" id="height" min="0" max="2.5" step="0.01" value="0.3">
     </div>
     <div class="ctrl">
-      <label>なめらかさ <span class="v" id="v-smooth">1</span></label>
+      <label>なめらかさ <input class="num" type="number" id="v-smooth" min="0" max="6" step="1" value="1"></label>
       <input type="range" id="smooth" min="0" max="6" step="1" value="1">
     </div>
     <div class="ctrl">
-      <label>コントラスト <span class="v" id="v-contrast">1.20</span></label>
+      <label>コントラスト <input class="num" type="number" id="v-contrast" min="0.5" max="2.5" step="0.01" value="1.20"></label>
       <input type="range" id="contrast" min="0.5" max="2.5" step="0.01" value="1.2">
     </div>
     <div class="ctrl">
-      <label>地層化 <span class="v" id="v-terrace">off</span></label>
+      <label>地層化 <input class="num" type="number" id="v-terrace" min="0" max="20" step="1" value="0"></label>
       <input type="range" id="terrace" min="0" max="20" step="1" value="0">
     </div>
     <div class="row">
@@ -118,7 +126,7 @@
     </div>
     <div class="row">
       <div class="toggle on" id="t-light">ライト追従</div>
-      <div class="toggle" id="t-rotate">自動回転</div>
+      <div class="toggle on" id="t-rotate">自動回転</div>
     </div>
     <div class="sep"></div>
     <div class="row">
@@ -152,7 +160,7 @@
     const SEG_X = 280;          // plane subdivisions (width); height derived from image aspect
     const PLANE_W = 4.0;        // world width of the relief
     const MAX_TEX = 4096;       // cap display-texture dimension (GPU-safe; visually full quality)
-    const RISE_DUR = 1.3;       // seconds for the flat->relief animation
+    const RISE_DUR = 3.2;       // seconds for the flat->relief animation (slow, "じんわり")
     const DEFAULT_IMG = 'assets/02-portrait.jpg'; // local default (gitignored); 404s on public demo
 
     // ---------- scene ----------
@@ -173,19 +181,48 @@
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.minDistance = 3;
+    controls.minDistance = 2.2;   // allow closer so a wide viewport can fill its width
     controls.maxDistance = 11;
     controls.target.set(0, 0, 0);
 
+    // Pull the camera back to exactly the distance where the relief's world width
+    // (PLANE_W) spans the full viewport width. Re-run on resize until the user
+    // first grabs the controls, so the framing stays width-filled out of the box.
+    let userMoved = false, isDragging = false;
+    controls.addEventListener('start', () => {
+      userMoved = true; isDragging = true;
+      // User grabbed the controls (drag or wheel-zoom) — hand over fully: stop the
+      // auto-sway and switch the toggle off so the button stays the single source
+      // of truth. They re-enable sway by clicking 自動回転 again.
+      if (params.autoRotate) {
+        params.autoRotate = false;
+        const t = document.getElementById('t-rotate');
+        if (t) t.classList.remove('on');
+      }
+    });
+    controls.addEventListener('end', () => { isDragging = false; });
+    let frameDist = 6;          // camera distance that fills the viewport width
+    function frameToWidth() {
+      const vFOV = camera.fov * Math.PI / 180;
+      const hFOV = 2 * Math.atan(Math.tan(vFOV / 2) * camera.aspect);
+      frameDist = (PLANE_W / 2) / Math.tan(hFOV / 2);
+      camera.position.set(0, 0.12, frameDist);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+
     // ---------- lights ----------
-    const ambient = new THREE.AmbientLight(0xffffff, 0.16);
+    // Ambient floor: high enough that even when the mouse light grazes from the
+    // side, the whole face stays legible (the relief reads as a face, not a
+    // half-lit silhouette). Was 0.16 — too dark, the face vanished at the edges.
+    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
     scene.add(ambient);
 
-    const keyLight = new THREE.PointLight(0xfff1dd, 26, 40, 2); // mouse-following
+    const keyLight = new THREE.PointLight(0xfff1dd, 18, 40, 2); // mouse-following
     keyLight.position.set(1.6, 1.4, 2.6);
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x5566aa, 0.35);
+    const fillLight = new THREE.DirectionalLight(0x8899cc, 0.55);
     fillLight.position.set(-3, -1, 2);
     scene.add(fillLight);
 
@@ -214,8 +251,8 @@
     }
 
     const params = {
-      height: 0.9, smooth: 1, contrast: 1.2, terrace: 0,
-      invert: false, stone: false, lightFollow: true, autoRotate: false
+      height: 0.3, smooth: 1, contrast: 1.2, terrace: 0,
+      invert: false, stone: false, lightFollow: true, autoRotate: true
     };
     let rise = 0, rising = false, needsRebuild = false;
 
@@ -253,11 +290,15 @@
       blurLum = out;
     }
 
+    // smootherstep — eases both the start and the end of the 0->0.3 rise so it
+    // creeps up gently rather than snapping to full height.
+    const ease = x => { x = x < 0 ? 0 : x > 1 ? 1 : x; return x * x * x * (x * (x * 6 - 15) + 10); };
+
     function rebuildHeights() {
       if (!mesh || !blurLum) return;
       const pos = geometry.attributes.position;
       const c = params.contrast, t = params.terrace, inv = params.invert;
-      const hs = params.height * rise;
+      const hs = params.height * ease(rise);
       for (let i = 0; i < vCount; i++) {
         let l = blurLum[i];
         l = (l - 0.5) * c + 0.5;
@@ -294,6 +335,9 @@
     // ---------- image -> texture + luminance grid ----------
     function processImage(img) {
       const iw = img.width, ih = img.height;
+      // Guard degenerate dimensions (e.g. an SVG with no intrinsic size): a 0 here
+      // would make aspect Infinity/NaN and planeH = Infinity → NaN vertices.
+      if (!iw || !ih) { loadProcedural(); return; }
       const aspect = ih / iw;
       const segY = segYFor(aspect);
       const gw = SEG_X + 1, gh = segY + 1;
@@ -329,7 +373,14 @@
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-      if (currentTex) currentTex.dispose(); // free the previous image's GPU texture
+      if (currentTex) {
+        const oldCanvas = currentTex.image;        // the previous tc canvas
+        currentTex.dispose();                      // free the previous image's GPU texture
+        // CanvasTexture holds a ref to its source canvas; a 4096² backing store is
+        // ~64MB. Zero it so the backing store frees now instead of waiting for GC —
+        // matters on the public demo when many images are dropped in a row.
+        if (oldCanvas && 'width' in oldCanvas) { oldCanvas.width = 0; oldCanvas.height = 0; }
+      }
       currentTex = tex;
       buildMesh(iw, ih, lum);
       applyMaterialMode();
@@ -384,19 +435,36 @@
       $('drophint').style.display = on ? 'flex' : 'none';
     }
 
+    // Slider + number field are two views of one value. Either edits params[key],
+    // then both views are written back (clamped to the slider's min/max). `fmt`
+    // controls how the slider's drag value is shown in the number field.
     function bindSlider(id, key, fmt, post) {
-      const el = $(id), out = $('v-' + id);
-      el.addEventListener('input', () => {
-        params[key] = parseFloat(el.value);
-        out.textContent = fmt(params[key]);
+      const slider = $(id), num = $('v-' + id);
+      const lo = parseFloat(slider.min), hi = parseFloat(slider.max);
+      const clamp = v => v < lo ? lo : v > hi ? hi : v;
+      const apply = (raw, fromNum) => {
+        let v = parseFloat(raw);
+        if (!isFinite(v)) return;        // ignore mid-typing empty / partial input
+        const clamped = clamp(v);
+        params[key] = clamped;
+        slider.value = clamped;
+        // Don't fight the user's caret mid-typing — but if their typed value was
+        // out of range, correct the field immediately so it can't display a lie.
+        if (!fromNum || clamped !== v) num.value = fmt(clamped);
         if (post) post();
         needsRebuild = true;
-      });
+      };
+      slider.addEventListener('input', () => apply(slider.value, false));
+      num.addEventListener('input', () => apply(num.value, true));
+      // on blur / Enter, normalise the number field to the canonical format
+      const normalise = () => { num.value = fmt(params[key]); };
+      num.addEventListener('change', normalise);
+      num.addEventListener('blur', normalise);
     }
     bindSlider('height', 'height', v => v.toFixed(2));
-    bindSlider('smooth', 'smooth', v => String(v), () => computeBlur());
+    bindSlider('smooth', 'smooth', v => String(Math.round(v)), () => computeBlur());
     bindSlider('contrast', 'contrast', v => v.toFixed(2));
-    bindSlider('terrace', 'terrace', v => v < 2 ? 'off' : String(v));
+    bindSlider('terrace', 'terrace', v => v < 2 ? '0' : String(Math.round(v)));
 
     function bindToggle(id, key, onChange) {
       const el = $(id);
@@ -409,8 +477,10 @@
     bindToggle('t-invert', 'invert', () => { needsRebuild = true; });
     bindToggle('t-material', 'stone', applyMaterialMode);
     bindToggle('t-light', 'lightFollow');
-    bindToggle('t-rotate', 'autoRotate', () => { controls.autoRotate = params.autoRotate; });
-    controls.autoRotateSpeed = 0.8;
+    // "自動回転" is a gentle side-to-side sway around the front, NOT a full orbit —
+    // a 360° spin would view the shallow relief edge-on and break the face. Handled
+    // manually in the loop (see swayT) instead of controls.autoRotate.
+    bindToggle('t-rotate', 'autoRotate');
 
     $('b-rise').addEventListener('click', () => { if (mesh) { rise = 0; rising = true; } });
     $('b-file').addEventListener('click', () => $('file').click());
@@ -445,19 +515,40 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      if (!userMoved) frameToWidth(); // keep it width-filled until the user takes over
     });
 
     // ---------- loop ----------
     const clock = new THREE.Clock();
     const lightTarget = new THREE.Vector3();
+    let swayT = 0;                         // phase of the gentle auto-sway
+    const SWAY_DEG = 24;                   // half-amplitude: front ±24°, never edge-on
     function animate() {
       requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.05);
 
+      // Auto-sway: orbit the camera a little left/right of dead-center so the relief
+      // reads as 3D, but stay near the front so the face is always legible. Pauses
+      // while the user is dragging and resumes when released. The toggle is the
+      // single source of truth for whether it runs.
+      if (params.autoRotate && !isDragging) {
+        swayT += dt;
+        const ang = Math.sin(swayT * 0.5) * (SWAY_DEG * Math.PI / 180);
+        // Keep whatever radius the camera currently has (respects any prior zoom)
+        // rather than snapping back to frameDist every frame.
+        const r = Math.hypot(camera.position.x, camera.position.z) || frameDist;
+        camera.position.x = Math.sin(ang) * r;
+        camera.position.z = Math.cos(ang) * r;
+        controls.target.set(0, 0, 0);
+      }
+
       if (params.lightFollow) {
-        // world-space reach of the mouse light, tuned to the PLANE_W=4 framing;
-        // z held in front (+2.6) so the light grazes the relief from the viewer side
-        lightTarget.set(mouse.x * 3.2, mouse.y * 2.4, 2.6);
+        // World-space reach of the mouse light, tuned to the PLANE_W=4 framing.
+        // Sweep is kept narrow (±1.7 / ±1.3) and z held well in front (3.0) so the
+        // light always grazes from the viewer side rather than raking hard from an
+        // edge — that keeps the face readable across the whole mouse range while
+        // still shifting the highlights enough to "explore" the relief.
+        lightTarget.set(mouse.x * 1.7, mouse.y * 1.3, 3.0);
         keyLight.position.lerp(lightTarget, 0.08);
       }
 
@@ -476,6 +567,7 @@
     animate();
 
     // ---------- boot: try local default, else procedural ----------
+    frameToWidth(); // width-fill the relief on first paint
     loadImageSrc(DEFAULT_IMG, () => loadProcedural());
 
     // safety: if texture never loads (e.g. very slow), reveal scene anyway

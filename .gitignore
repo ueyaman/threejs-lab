@@ -8,3 +8,6 @@ assets/02-portrait.jpg
 # Verification / tooling artifacts
 .playwright-mcp/
 *.local.png
+
+# Brainstorm exports — contain a personal ChatGPT conversation URL. Keep local, don't publish.
+docs/**/draftIdea.md
