@@ -7,7 +7,16 @@ assets/02-portrait.jpg
 
 # Verification / tooling artifacts
 .playwright-mcp/
-*.local.png
+*.local.*
 
-# Brainstorm exports — contain a personal ChatGPT conversation URL. Keep local, don't publish.
+# Brainstorm exports / working notes — contain personal notebook URLs (ChatGPT,
+# NotebookLM) or local-machine paths. Keep local, don't publish.
 docs/**/draftIdea.md
+docs/**/*-inquiry.md
+docs/**/STATUS.md
+
+# 04 Emergent Portrait — heavy intermediates kept local. The repo ships only the
+# optimized versions (04-portrait.glb = Draco, 04-backdrop.webp).
+assets/04-portrait-source.png
+assets/04-backdrop.png
+assets/04-portrait.orig.glb

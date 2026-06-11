@@ -22,6 +22,7 @@ threejs-lab/
 ├── 01-rotating-cube.html    # 基本: 回転するキューブ
 ├── 02-photo-terrain.html    # 画像地形化: 明暗を高さにした3Dレリーフ
 ├── 03-mona-lisa-warp.html   # 画像ワープ: マウスで引きずる頂点バネ物理
+├── 04-emergent-portrait.html # 浮上する肖像: スクロールで2D写真→3D肖像
 ├── assets/                  # 画像素材（一部 .gitignore 対象。下記参照）
 └── README.md                # このファイル
 ```
@@ -38,6 +39,11 @@ threejs-lab/
   リポジトリに**同梱**し、公開版でもそのまま表示する。
 
 どちらも手元の画像を**ドラッグ&ドロップ**で差し替えられるので、ツールとして成立する。
+
+- **`04-emergent-portrait.html`** の素材は**生成AI製**（画像: nano banana pro、3D化: Tripo3D）
+  なのでリポジトリに同梱する。ただし重い中間素材（原寸PNG・無圧縮GLB）は `.gitignore` し、
+  **最適化済みの配信用**（`04-portrait.glb` = Draco 圧縮 1.75MB / `04-backdrop.webp` = 78KB）
+  だけをコミットしている。
 
 ### ファイル命名規則
 
@@ -99,6 +105,7 @@ git push
 | 01 | `01-rotating-cube.html` | 回転するキューブ（基本ライティング） | ✅ 完成 |
 | 02 | `02-photo-terrain.html` | 画像地形化（明暗→高さのレリーフ／マウス追従ライト／OrbitControls／画像D&D） | ✅ 完成 |
 | 03 | `03-mona-lisa-warp.html` | 画像をマウスで引きずって歪ませる頂点バネ物理（中村勇吾 tha オマージュ／グリッド可視化／画像D&D） | ✅ 完成 |
+| 04 | `04-emergent-portrait.html` | 浮上する肖像: スクロールで2D写真→3D肖像が立ち上がる（生成AI→Tripo3D GLB／輪郭線オーバーレイ／マウス首振りパララックス±10°＋ライト追従） | ✅ 完成 |
 
 ---
 
@@ -106,7 +113,9 @@ git push
 
 - [x] OrbitControls など追加ライブラリの導入パターンを確立（`02` で `three/addons/` を importmap 追加）
 - [x] `03-mona-lisa-warp` 追加（頂点バネ物理によるマウスドラッグ歪み／中村勇吾オマージュ）
-- [ ] `04-` 次の実験テーマを決めて追加（パーティクル分解 / シェーダー波形 など）
+- [x] `04-emergent-portrait` 追加（生成AI画像 → Tripo3D → スクロールで2D→3D遷移）
+- [ ] `04` Phase 2: Seedance で backdrop を image-to-video 化（まばたき・呼吸・髪の微動）し動画レイヤーを組み込む
+- [ ] `05-` 次の実験テーマを決めて追加（パーティクル分解 / シェーダー波形 など）
 - [ ] `index.html` のサムネイルを実際のキャプチャ画像に差し替え（任意）
 - [ ] `02` 改良案: 高さマップ用のぼかしを表示テクスチャと分離 / 等高線オーバーレイ / スクロール連動の立ち上がり
 - [ ] `03` 改良案: SEG_X を上げる場合は `pos.array` 直接アクセスに切替（getX/setX のコスト回避）

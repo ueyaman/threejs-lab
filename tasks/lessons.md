@@ -79,3 +79,37 @@
   とは逆で gitignore 不要）。Wikimedia は任意サイズの thumbnail 生成を制限しているので、
   Commons API（`action=query&prop=imageinfo&iiurlwidth=N`）で**許可済み thumburl を取得**
   してから落とす（直 URL で 600px 等を叩くと 400 "Use thumbnail sizes listed"）。
+
+## 2026-06-10/11 — 04-emergent-portrait（生成AI画像 → Tripo3D → 2D→3D遷移）
+
+### 画像生成 → 3D化のパイプラインは「2枚作り分け + i2i」で人物同一性を担保
+- 1枚の画像に「美術的な情緒」と「3D化しやすいクリーンさ」を両立させようとしない。
+  (a) Tripo 入力用＝正面・均一光・輪郭明瞭のクリーン版、(b) 2D背景プレート用＝薄暗い
+  室内の美術版、の2枚を作り、**クリーン版を i2i の参照画像にして背景版を生成**すると
+  同一人物のまま雰囲気だけ変えられる（nano banana pro: medias の role:image に prior
+  job_id を渡す）。NotebookLM 正典照合の裁定:「光と輪郭は3Dのためクリーンに保ち、
+  不穏さは視線・表情・髪のタイトさに全振り」。
+
+### Tripo3D REST フロー（upload → image_to_model → poll → pbr_model）
+- `https://api.tripo3d.ai/v2/openapi` に upload → task 作成（type: image_to_model）→
+  status poll → `output.pbr_model` の URL から GLB を DL。1生成 ≈ 30クレジット。
+  再現スクリプト: `docs/260610/tripo-gen.sh`。
+
+### 生成GLBの「正面」は仕様で決まっていない＝yaw掃引で実測する
+- Tripo のバストは **−X 向き**でエクスポートされていた（+Z 正面を仮定すると横顔になる）。
+  `model.rotation.y` を 90° 刻みでスクショ比較して正面を確定（今回は `Math.PI * 1.5`）。
+  生成系3Dは毎回向きが違い得るので、取り込んだら必ず正面を実測する。
+- あわせて Tripo は metallic=1/roughness=1 で出してくるので、石膏調にするなら
+  metalness 0 / roughness 0.92 へ上書き（テクスチャは活かす）。
+
+### 画像→3D→Web は「素材をそのまま置くと 30MB 超」— Draco + WebP で 94% 削減
+- Tripo GLB はジオメトリが支配的（26万頂点 f32 = 14.35MB。テクスチャは 2048² JPEG
+  ×3 で計 400KB しかない）→ **テクスチャ縮小は効かず、Draco 圧縮が本命**。
+  `npx @gltf-transform/cli draco in.glb out.glb` だけで 14.7MB → 1.75MB（見た目無劣化）。
+- HTML 側は `DRACOLoader` + `setDecoderPath(CDN の three と同バージョンの
+  examples/jsm/libs/draco/gltf/)` が必要。デコーダ実費は +70KB で元が取れる。
+- 暗い写真の背景プレートは WebP 圧縮が極端に効く（17.8MB PNG → 1600px q85 で 78KB、
+  バンディングなし）。cwebp/magick が無い環境でも **ffmpeg の libwebp** で変換できる
+  （`ffmpeg -i in.png -vf scale=1600:-2 -c:v libwebp -quality 85 out.webp`）。
+- 原寸 PNG・無圧縮 GLB は中間素材として `.gitignore`（`*.orig.glb` 等）し、配信用だけ
+  コミットする。合計ロード 32.6MB → 1.86MB。
