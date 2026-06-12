@@ -182,6 +182,76 @@
 - 検証は「プレート角の NDC」でなく **「NDC ボックス 8 点 → 平面交差が
   プレート矩形内か」**で行う（プレート角は画面外の高さなので誤判定する）。
 
+## 2026-06-12 — 04 Phase 2（Seedance i2v「生きた写真」）
+
+### i2v は start_image ロール + ネイティブアスペクトで「枠ズレゼロ」にする
+- 2D プレートの UV 定数（PHOTO_HEAD 等）はスチルで実測した値なので、動画の枠が
+  1px でもズレると破綻する。Seedance 2.0 は **3:4 をネイティブ対応**しており、
+  `start_image` ロールで入力すると 1フレーム目≈入力画像のまま動き出す。
+  仕上げに ffmpeg で **スチルと同一アスペクトへクロップ**（1248×1664→1242×1664）
+  すれば、スチルの完全な差し替え品になる。
+- 「カメラ静止」はプロンプトで多重に縛る（static locked-off tripod, no zoom/pan/
+  dolly, framing stays exactly unchanged）。今回 3フレーム比較で窓位置ピクセル一致。
+
+### シームレスループは「先頭を末尾にクロスフェード」— xfade は CFR 必須
+- ループ式: 本体=trim(F..D)、頭=trim(0..F)、`xfade=fade:duration=F:offset=本体長-F`。
+  こうすると **ループ末尾のフレーム = S(F) = ループ先頭のフレーム** になり継ぎ目が
+  消える（境界 PSNR 43-45dB = 同一フレームを実測確認）。
+- 罠: trim/setpts の後の xfade は「inputs needs to be a constant frame rate」で落ちる。
+  **xfade の両入力の直前に `fps=24`** を置いて CFR を再スタンプする（crop 直後では不十分）。
+- 光量が変わる映像（光芒が育つ等）はループ周期が短いと脈動して見える →
+  `setpts=1.5*PTS` でスローにして周期を伸ばす（超低速モーションはフレーム複製でも破綻しない）。
+
+### VideoTexture は「スチル先行 → 再生可能になってから差し替え」の漸進アップグレード
+- スチルを即表示し、`<video muted loop playsinline>` の canplaythrough → play() 成功後に
+  `mat.map = new THREE.VideoTexture(v)` で差し替えると、404・autoplay 拒否・低速回線の
+  すべてで「動画なし版」に自然degrade する。旧スチル texture は dispose（GPU側のみ。
+  `.image` の寸法は残るのでフレーミング計算に使い続けられる）。
+- 罠: 共有のフレーミング関数が `tex.image.width` を読んでいると、map が <video> に
+  替わった瞬間 `videoWidth` でなく DOM width(0) を読んで **NaN 化**する。
+  `(image.videoWidth || image.width)` で両対応にする。
+- 再生は見える区間だけ: スクロール位置で play/pause をゲートする（`v.paused` は
+  play() 呼び出しで同期的に false になるので毎フレーム判定でもスラッシュしない）。
+- 結果: モノクロ静止系の i2v ループは h264 CRF26 で **327KB/501KB** と激安
+  （1242×1664・4.3s/6.4s）。「数MB級」の事前見積りより1桁軽い。
+
+### `<video>` を currentTime でシークする UI は「シークが正しく着地するか」を必ず実測する
+- ffmpeg の `fps=24` フィルタ経由で再エンコードした mp4 が、**線形再生は正常なのに
+  シークだけ壊れる**状態になった（`currentTime=1.2` が ~0 に着地、別の機会には終端
+  10.04 に着地 → 「動画が一瞬で終わる」ように見える不可解バグ）。再生レートは正常な
+  ので、currentTime のトレース（ページ内 setInterval サンプリング）を取るまで原因を
+  シーク破損と特定できなかった。
+- 対策: ソースが既に CFR なら fps フィルタを挟まない + `-g 24 -keyint_min 24` で
+  毎秒キーフレームを打つ → シークがフレーム精度で着地するようになった。
+- **シークしない動画（play/pause のみのループ）はこの破損があっても症状ゼロ**。
+  なので「他の動画は動いてるのに」という思い込みが調査を遅らせる。シークを使う
+  クリップだけ壊れて見える。
+- 検証パターン: `v.currentTime=X; await 150ms; v.currentTime を読み戻す` を 3 点
+  （中間・後半・0）でやれば 1 コールで判定できる。
+
+### NotebookLM 正典照合は「プロンプト設計」にも効く（Seedance ガイド初運用）
+- 効いた裁定: 文学的感情語（madness/dread）→ 物理挙動への全置換 / 秒数3ビート
+  （Establish-Develop-Payoff）/ end_image はトランジション用で演技制御には不適 /
+  genre はカメラ・ペーシングまで動かすので固定カメラ要件では auto 維持。
+- 結果: **狂気の叫び 10s が 1 発で要件全達成**（同一人物のまま絶叫・カメラ不動・
+  終端ピーク保持・口内破綻なし）。90cr の一発勝負前に 7 問の照会で外しどころを
+  潰す方が、リテイク連打より速くて安い。
+- 回答内の他モデル由来の汎用ネガティブ列挙は文脈混入として棄却（上位原則
+  「過度なネガティブ依存を避ける」と矛盾するため）— 正典回答も鵜呑みにせず
+  ガイド内部の原則で裁定する。
+
+### 「完成レンダ風」のリアルタイム化 = IBL + ベイク AO の2点で激変する
+- ACES + 3点ライトだけでは「リアルタイムの絵」。**RoomEnvironment の IBL**
+  (PMREMGenerator.fromScene、アセット0個) と **Blender ヘッドレスで焼いた AO**
+  (Cycles 64spl・1024²・1〜2分) を足すだけでオフラインレンダの陰影になる。
+  IBL を入れたら AmbientLight は大幅減 (0.5→0.18)。AO が効くのは環境光・
+  アンビエント項のみなので IBL とセットで初めて効く。
+- aoMap は three r152+ なら `texture.channel=0` で既存 UV をそのまま使える
+  (uv2 不要)。強さは aoMapIntensity / envMapIntensity で材質ごとに調整。
+- **AO ベイク PNG の向き**: Blender が保存したベイク画像は、glTF メッシュに
+  `flipY=false` でそのまま正しい (vflip すると UV アイランドが顔に多角形の
+  まだらとして乗る)。理屈で悩むより「まだら=向きが逆」のサインで覚える。
+
 ### Blender はヘッドレス（--background --python）で GLB 検査・修理ができる
 - GUI/MCP addon 不要。matcap+cavity の Workbench レンダで形状検査、numpy で
   `img.pixels.foreach_get/set` してテクスチャ外れ値修復（5×5メディアン比較）、再エクスポート。

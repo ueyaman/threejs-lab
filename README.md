@@ -40,10 +40,11 @@ threejs-lab/
 
 どちらも手元の画像を**ドラッグ&ドロップ**で差し替えられるので、ツールとして成立する。
 
-- **`04-emergent-portrait.html`** の素材は**生成AI製**（画像: nano banana pro、3D化: Tripo3D）
-  なのでリポジトリに同梱する。ただし重い中間素材（原寸PNG・無圧縮GLB）は `.gitignore` し、
-  **最適化済みの配信用**（`04-portrait.glb` = Draco 圧縮 1.75MB / `04-backdrop.webp` = 78KB）
-  だけをコミットしている。
+- **`04-emergent-portrait.html`** の素材は**生成AI製**（画像: nano banana pro、3D化: Tripo3D、
+  動画: Seedance 2.0 i2v）なのでリポジトリに同梱する。ただし重い中間素材（原寸PNG・無圧縮GLB・
+  生成直後のmp4）は `.gitignore` し、**最適化済みの配信用**（`04-portrait.glb` = Draco 圧縮 1.75MB /
+  `04-backdrop.webp` = 78KB / 動画 `04-backdrop.mp4` 327KB + `04-backdrop-empty.mp4` 501KB +
+  `04-backdrop-scream.mp4` 1.30MB / ベイクAO `04-portrait-ao.webp` 108KB）だけをコミットしている。
 
 ### ファイル命名規則
 
@@ -105,7 +106,7 @@ git push
 | 01 | `01-rotating-cube.html` | 回転するキューブ（基本ライティング） | ✅ 完成 |
 | 02 | `02-photo-terrain.html` | 画像地形化（明暗→高さのレリーフ／マウス追従ライト／OrbitControls／画像D&D） | ✅ 完成 |
 | 03 | `03-mona-lisa-warp.html` | 画像をマウスで引きずって歪ませる頂点バネ物理（中村勇吾 tha オマージュ／グリッド可視化／画像D&D） | ✅ 完成 |
-| 04 | `04-emergent-portrait.html` | 浮上する肖像: スクロールでグリッチの嵐とともに写真の人物が消え、同じ場所に3D肖像が浮上（生成AI→Tripo3D／写真頭部への投影アンカー／人物なし背景へスワップ／キー1-4で質感切替: 石膏・ワイヤー・点群・版画） | ✅ 完成 |
+| 04 | `04-emergent-portrait.html` | 浮上する肖像: スクロールでグリッチの嵐とともに写真の人物が消え、同じ場所に3D肖像が浮上（生成AI→Tripo3D／写真頭部への投影アンカー／人物なし背景へスワップ／キー1-4で質感切替: 石膏・ワイヤー・点群・版画／背景は Seedance i2v の「生きた写真」: 瞬き・呼吸・窓の光芒、嵐の中で人物が声なき絶叫へ変貌する10秒テイクオーバー付き） | ✅ 完成 |
 
 ---
 
@@ -114,7 +115,7 @@ git push
 - [x] OrbitControls など追加ライブラリの導入パターンを確立（`02` で `three/addons/` を importmap 追加）
 - [x] `03-mona-lisa-warp` 追加（頂点バネ物理によるマウスドラッグ歪み／中村勇吾オマージュ）
 - [x] `04-emergent-portrait` 追加（生成AI画像 → Tripo3D → スクロールで2D→3D遷移）
-- [ ] `04` Phase 2: Seedance で backdrop を image-to-video 化（まばたき・呼吸・髪の微動）し動画レイヤーを組み込む
+- [x] `04` Phase 2: Seedance で backdrop を image-to-video 化（まばたき・呼吸・髪の微動＋empty room の光芒）し VideoTexture で組み込み
 - [ ] `05-` 次の実験テーマを決めて追加（パーティクル分解 / シェーダー波形 など）
 - [ ] `index.html` のサムネイルを実際のキャプチャ画像に差し替え（任意）
 - [ ] `02` 改良案: 高さマップ用のぼかしを表示テクスチャと分離 / 等高線オーバーレイ / スクロール連動の立ち上がり
