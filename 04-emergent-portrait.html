@@ -39,6 +39,13 @@
     }
     @keyframes pulse { 0%,100%{opacity:.35} 50%{opacity:.85} }
 
+    #look {
+      position: fixed; right: 1.2rem; bottom: 1.1rem; z-index: 9;
+      font-size: 0.68rem; color: #6f6a5e; letter-spacing: 0.12em; pointer-events: none;
+      transition: color 0.5s;
+    }
+    #look.flash { color: #e8e3d8; }
+
     #title {
       position: fixed; top: 1rem; right: 1.2rem; z-index: 9; text-align: right;
       pointer-events: none;
@@ -69,6 +76,7 @@
   <div class="caption" id="cap3"><b>そこに在るもの。</b><br>写真は、像になった。</div>
 
   <div id="hint">SCROLL ↓ &nbsp;/&nbsp; MOVE MOUSE</div>
+  <div id="look"></div>
   <div id="loading">loading…</div>
 
   <script type="importmap">
@@ -83,11 +91,30 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
     // ---------- config ----------
     const BACKDROP = 'assets/04-backdrop.webp';    // 2D plate (the woman in a dim room)
+    const BACKDROP_EMPTY = 'assets/04-backdrop-empty.webp'; // same room, nobody (i2i) — optional
     const MODEL    = 'assets/04-portrait.glb';     // Tripo3D bust of the same woman
+    const MODEL_WIRE = 'assets/04-portrait-wire.glb'; // 2% decimated twin for look B (57KB)
     const MAX_ROT  = 10 * Math.PI / 180;           // model rotation clamp (±10°) — hide AI-3D flaws
+    // Where the subject's head sits in the backdrop IMAGE (fractions of the image,
+    // measured from the top-left) plus her pose. The bust emerges anchored onto this
+    // head, then settles into the front-facing centered pose as you scroll.
+    // yaw is small: at the GLB's corrected "front" the bust already sits in a 3/4
+    // right-facing pose that nearly matches the photo.
+    const PHOTO_HEAD = { u: 0.50, vTop: 0.072, vBottom: 0.445, yaw: 0.1 };
+    // Bust-head metrics measured by rendering the model alone at a known transform
+    // (group at (0,0,0.4), scale 1, yaw 0) and converting pixels → world units.
+    // (OFF/X absorb the head's forward-z parallax, calibrated layer-vs-layer at the
+    // anchor geometry itself — don't re-derive them from the bare bbox.)
+    const MODEL_HEAD_H   = 1.58; // head height (hair top→chin) in group units
+    const MODEL_HEAD_OFF = 0.87; // group origin → head center, vertical
+    const MODEL_HEAD_X   = 0.43; // group origin → head center, horizontal (head sits right of origin)
 
     // ---------- scene ----------
     const stage = document.getElementById('stage');
@@ -105,6 +132,63 @@
     renderer.toneMappingExposure = 1.3;
     stage.appendChild(renderer.domElement);
 
+    // ---------- post: scroll-driven glitch / blur (masks the photo->3D swap) ----------
+    const GlitchBlurShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        uTime:   { value: 0 },
+        uGlitch: { value: 0 },   // 0..1 band displacement + rgb shift + static
+        uBlur:   { value: 0 },   // 0..1 soft defocus
+        uGrain:  { value: 0.045 }, // constant film grain — one "film stock" for 2D and 3D
+        uPixel:  { value: new THREE.Vector2(1 / 1024, 1 / 1024) },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tDiffuse;
+        uniform float uTime, uGlitch, uBlur, uGrain;
+        uniform vec2 uPixel;
+        varying vec2 vUv;
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+        void main() {
+          vec2 uv = vUv;
+          // blocky horizontal slice displacement (only some bands, re-rolled in time)
+          float band = floor(uv.y * 28.0) / 28.0;
+          float seed = floor(uTime * 9.0);
+          float gate = step(1.0 - 0.45 * uGlitch, hash(vec2(band, seed + 13.0)));
+          uv.x += (hash(vec2(band, seed)) - 0.5) * 0.22 * uGlitch * gate;
+          // cross blur, mixed in by uBlur
+          vec2 px = uPixel * (1.0 + 18.0 * uBlur);
+          vec4 blurred = texture2D(tDiffuse, uv) * 0.4
+            + (texture2D(tDiffuse, uv + vec2(px.x, 0.)) + texture2D(tDiffuse, uv - vec2(px.x, 0.))) * 0.15
+            + (texture2D(tDiffuse, uv + vec2(0., px.y)) + texture2D(tDiffuse, uv - vec2(0., px.y))) * 0.15;
+          vec4 c = mix(texture2D(tDiffuse, uv), blurred, clamp(uBlur * 2.5, 0.0, 1.0));
+          // rgb split (stronger on displaced bands)
+          float sh = (0.0045 + 0.012 * gate) * uGlitch;
+          c.r = texture2D(tDiffuse, uv + vec2(sh, 0.)).r;
+          c.b = texture2D(tDiffuse, uv - vec2(sh, 0.)).b;
+          // static sprinkle + scanline shimmer while glitching
+          float n = hash(uv * vec2(917.0, 311.0) + mod(uTime, 10.0) * 61.0);
+          c.rgb += (n - 0.5) * 0.4 * uGlitch * uGlitch;
+          c.rgb *= 1.0 - 0.12 * uGlitch * sin(uv.y * 900.0 + uTime * 30.0);
+          // ever-present grain so the photo plate and the 3D share one film
+          c.rgb += (hash(uv * vec2(517.0, 733.0) + mod(uTime, 7.0) * 39.0) - 0.5) * uGrain;
+          gl_FragColor = c;
+        }`,
+    };
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    composer.addPass(new RenderPass(scene, camera));
+    const glitchPass = new ShaderPass(GlitchBlurShader);
+    composer.addPass(glitchPass);
+    composer.addPass(new OutputPass());
+    function sizeComposer() {
+      composer.setSize(innerWidth, innerHeight);
+      glitchPass.uniforms.uPixel.value.set(1 / innerWidth, 1 / innerHeight);
+    }
+    sizeComposer();
+
     // ---------- lights ----------
     const ambient = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambient);
@@ -118,36 +202,208 @@
     fill.position.set(-3, -1, 2);
     scene.add(fill);
 
-    // ---------- backdrop plane (2D photo) ----------
+    // ---------- backdrop planes (2D photo + person-less variant) ----------
+    // Two stacked plates: the woman version dissolves away during the glitch swap,
+    // revealing the empty-room version behind it — so the photo face and the 3D face
+    // are never both crisp at the same time.
     let backdrop = null, backdropMat = null;
+    let backdropEmpty = null, backdropEmptyMat = null;
     const texLoader = new THREE.TextureLoader();
     function frameBackdropAspect(tex) {
-      // size the backdrop plane to cover the viewport at its z, keeping image aspect
+      // size the backdrop plane to cover the viewport at its z, keeping image aspect.
+      // uses the plate's CURRENT z (not the fixed BACKDROP_Z): the plates sink away
+      // from the camera over scroll, and a cover scale frozen at the load-time
+      // distance under-covers the frustum once sunk (~20% black borders at scroll 1)
       const imgAspect = tex.image.width / tex.image.height;
-      const dist = camera.position.z - BACKDROP_Z;
+      const plateZ = backdrop.position.z;
+      const dist = camera.position.z - plateZ;
       const vH = 2 * Math.tan((camera.fov * Math.PI / 180) / 2) * dist;
       const vW = vH * camera.aspect;
       // cover: scale so the plane fills the larger viewport dimension
       let h = vH, w = vH * imgAspect;
       if (w < vW) { w = vW; h = vW / imgAspect; }
+      // face-anchored crop: on wide viewports the portrait image overflows vertically
+      // and a centered crop pushes the face out of the top of the frame. Shift the
+      // plate down so the photo's head-top lands at vH*0.6 — i.e. 10% of the viewport
+      // ABOVE the visible edge: the crown is cropped on purpose for a tight portrait
+      // framing (user-reviewed look — this is not an inside-the-frame margin), and
+      // the crop depth stays a constant 0.1*vH at any viewport aspect. Clamped so
+      // the plate edge never shows.
+      const faceTop = (0.5 - PHOTO_HEAD.vTop) * h;
+      const maxOff = Math.max(0, (h - vH) / 2);
+      const posY = Math.max(-maxOff, Math.min(0, vH * 0.6 - faceTop));
+      // mouse parallax moves the camera off-axis while lookAt(0,0,0) tilts it, so the
+      // real frustum footprint on the plate plane is wider than the on-axis vW/vH
+      // (≈13% at full sink with the pointer in a corner). Project the four frustum
+      // corner rays onto the plate plane and zoom the plate just enough to cover
+      // them: m = 1 with the pointer at rest (tuned composition untouched), and the
+      // corner-case zoom eases with the camera so it reads as part of the parallax.
+      camera.updateMatrixWorld();
+      let needX = 0, needTop = 0, needBot = 0;
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+        frameV.set(sx, sy, 0.5).unproject(camera).sub(camera.position);
+        const t = (plateZ - camera.position.z) / frameV.z;
+        needX = Math.max(needX, Math.abs(camera.position.x + frameV.x * t));
+        const y = camera.position.y + frameV.y * t;
+        needTop = Math.max(needTop, y - posY);
+        needBot = Math.max(needBot, posY - y);
+      }
+      // ×1.002 buries the empty plate sitting 0.01 farther than the measured plane
+      const m = Math.max(1, 2 * needX / w, 2 * needTop / h, 2 * needBot / h) * 1.002;
+      w *= m; h *= m;
       backdrop.scale.set(w, h, 1);
+      backdrop.position.y = posY;
+      if (backdropEmpty) {
+        backdropEmpty.scale.set(w, h, 1);
+        backdropEmpty.position.y = posY;
+      }
     }
+    const frameV = new THREE.Vector3(); // scratch for frameBackdropAspect
     const BACKDROP_Z = -2.2;
     texLoader.load(BACKDROP, tex => {
       tex.colorSpace = THREE.SRGBColorSpace;
       backdropMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 1, depthWrite: false });
       backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), backdropMat);
       backdrop.position.z = BACKDROP_Z;
-      scene.add(backdrop);
+      backdrop.renderOrder = -1; // explicit plate order — depth-sorting two near-coplanar
+      scene.add(backdrop);       // plates flips with camera parallax otherwise
       frameBackdropAspect(tex);
       maybeReady();
     }, undefined, () => { backdropReady = true; maybeReady(); });
+    // optional second plate; page degrades to the old fade if it 404s
+    texLoader.load(BACKDROP_EMPTY, tex => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      backdropEmptyMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 1, depthWrite: false });
+      backdropEmpty = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), backdropEmptyMat);
+      backdropEmpty.position.z = BACKDROP_Z - 0.01; // just behind the woman plate
+      backdropEmpty.renderOrder = -2;               // always under the woman plate
+      scene.add(backdropEmpty);
+      // re-run framing so the empty plate picks up BOTH the cover scale and the
+      // face-anchored y offset (copying scale alone left it misaligned on wide screens)
+      if (backdrop && backdropMat && backdropMat.map) frameBackdropAspect(backdropMat.map);
+    }, undefined, () => {});
 
     // ---------- 3D model (Tripo bust) ----------
     let model = null, modelGroup = new THREE.Group();
     scene.add(modelGroup);
-    let modelMats = [];        // materials we fade
+    // tuning handle (console): lets us toggle layers / read transforms while calibrating
+    window.__dbg = { camera, modelGroup, get backdrop() { return backdrop; } };
     let edgeLines = null;      // contour overlay shown mid-transition
+
+    // ---------- look system (keys 1-4) ----------
+    // A matte-mono statue / B wireframe reconstruction / C point cloud / D hatching
+    let theMesh = null, matMatte = null, matDark = null, matHatch = null;
+    let wireObj = null, ptsObj = null;
+    let look = 'A';
+    const lookEl = document.getElementById('look');
+    const LOOK_TITLE = { A: 'MATTE MONO', B: 'WIREFRAME', C: 'POINT CLOUD', D: 'HATCHING' };
+    const LOOK_KEY = { A: '1', B: '2', C: '3', D: '4' };
+    function setLook(l) {
+      look = l;
+      if (theMesh) theMesh.material = (l === 'B') ? matDark : (l === 'D') ? matHatch : matMatte;
+      if (edgeLines) edgeLines.visible = (l !== 'B'); // the wireframe replaces the contour beat
+      if (wireObj) wireObj.visible = (l === 'B');
+      if (ptsObj) ptsObj.visible = (l === 'C');
+      lookEl.textContent = `LOOK [${LOOK_KEY[l]}] ${LOOK_TITLE[l]} — 1-4で切替`;
+      // brief flash so a key press at scroll 0 (where the bust is invisible) still
+      // gives visible feedback
+      lookEl.classList.add('flash');
+      clearTimeout(setLook._t);
+      setLook._t = setTimeout(() => lookEl.classList.remove('flash'), 900);
+    }
+    window.addEventListener('keydown', e => {
+      const m = { Digit1: 'A', Digit2: 'B', Digit3: 'C', Digit4: 'D' }[e.code];
+      if (m) setLook(m);
+    });
+    window.__dbg.setLook = setLook;
+
+    // full grayscale copy of a texture — the bust has faint skin tones that read as
+    // "CG render" against the monochrome film; one-time canvas conversion at load.
+    function toMonochrome(tex) {
+      if (!tex || !tex.image) return tex;
+      const cv = document.createElement('canvas');
+      cv.width = tex.image.width; cv.height = tex.image.height;
+      const cx = cv.getContext('2d');
+      cx.filter = 'grayscale(1)';
+      cx.drawImage(tex.image, 0, 0);
+      cx.filter = 'none';
+      // plaster mottle: multiply soft tiled noise so the white isn't one flat sheet
+      const nz = document.createElement('canvas');
+      nz.width = nz.height = 128;
+      const nx = nz.getContext('2d');
+      const nd = nx.createImageData(128, 128);
+      for (let i = 0; i < nd.data.length; i += 4) {
+        const v = 225 + (Math.random() * 30) | 0;
+        nd.data[i] = nd.data[i + 1] = nd.data[i + 2] = v;
+        nd.data[i + 3] = 255;
+      }
+      nx.putImageData(nd, 0, 0);
+      cx.globalCompositeOperation = 'multiply';
+      cx.globalAlpha = 0.85;
+      cx.fillStyle = cx.createPattern(nz, 'repeat');
+      cx.fillRect(0, 0, cv.width, cv.height);
+      cx.globalCompositeOperation = 'source-over';
+      cx.globalAlpha = 1;
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.flipY = tex.flipY; t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
+      t.needsUpdate = true;
+      tex.dispose();
+      return t;
+    }
+
+    // gritty micro-relief: 2-octave noise as a repeating bump map. The scanned mesh
+    // is perfectly smooth and we dropped its normal map, so without this the matte
+    // surface still reads as smooth plastic under the grazing key light.
+    function makeGritBump(size = 256, repeat = 6) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = size;
+      const cx = cv.getContext('2d');
+      const id = cx.createImageData(size, size);
+      for (let i = 0; i < id.data.length; i += 4) {
+        const v = 96 + (Math.random() * 64) | 0;
+        id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
+        id.data[i + 3] = 255;
+      }
+      cx.putImageData(id, 0, 0);
+      cx.globalAlpha = 0.5; // coarse octave over the fine one
+      cx.drawImage(cv, 0, 0, size / 4, size / 4, 0, 0, size, size);
+      cx.globalAlpha = 1;
+      const t = new THREE.CanvasTexture(cv);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(repeat, repeat);
+      return t;
+    }
+
+    // look D: screen-space cross hatching — stripe sets accumulate as the lit
+    // surface darkens, drawn over a paper tone (injected after lighting).
+    function injectHatching(mat) {
+      // uReveal (0..1) lets the lit statue breathe through the print as it settles
+      mat.userData.uReveal = { value: 0 };
+      mat.onBeforeCompile = (shader) => {
+        shader.uniforms.uReveal = mat.userData.uReveal;
+        shader.fragmentShader = shader.fragmentShader
+          .replace('uniform vec3 diffuse;', 'uniform vec3 diffuse;\nuniform float uReveal;')
+          .replace(
+            '#include <dithering_fragment>',
+            `#include <dithering_fragment>
+          {
+            vec3 lit = gl_FragColor.rgb;
+            float l = clamp(dot(lit, vec3(0.299, 0.587, 0.114)) * 1.35, 0.0, 1.0);
+            vec2 sc = gl_FragCoord.xy * 0.5;
+            float ink = 1.0;
+            ink *= mix(step(0.55, fract((sc.x + sc.y) * 0.18)), 1.0, smoothstep(0.55, 0.78, l));
+            ink *= mix(step(0.55, fract((sc.x - sc.y) * 0.18)), 1.0, smoothstep(0.30, 0.52, l));
+            ink *= mix(step(0.55, fract(sc.y * 0.18)),          1.0, smoothstep(0.08, 0.28, l));
+            vec3 paper  = vec3(0.82, 0.80, 0.74);
+            vec3 inkCol = vec3(0.10, 0.095, 0.09);
+            vec3 hatched = mix(inkCol, paper, clamp(ink * (0.30 + 0.70 * l), 0.0, 1.0));
+            gl_FragColor.rgb = mix(hatched, lit, uReveal);
+          }`
+          );
+      };
+      mat.needsUpdate = true;
+    }
 
     const gltfLoader = new GLTFLoader();
     // GLB is Draco-compressed (14.7MB -> 1.75MB). Decoder version must match the importmap three version.
@@ -177,20 +433,50 @@
       // Lean the bust toward plaster: keep texture but kill the metallic look,
       // soften roughness. (Tripo exports metallic=1/rough=1 PBR.)
       model.traverse(o => {
-        if (o.isMesh && o.material) {
+        if (o.isMesh && o.material && !theMesh) {
+          theMesh = o;
           const m = o.material;
           m.metalness = 0.0;
-          m.roughness = 0.92;
+          m.roughness = 1.0;        // dead matte — glossy "wet porcelain" reads as CG
+          // Tripo's heavily-compressed normal map adds gritty shading and a glitchy
+          // hot spot on the nose under the grazing key light — the plaster look reads
+          // cleaner from bare geometry.
+          m.normalMap = null;
+          m.roughnessMap = null;    // ORM roughness keeps glossy patches alive — kill it
+          m.metalnessMap = null;
+          m.map = toMonochrome(m.map);
+          m.bumpMap = makeGritBump();
+          m.bumpScale = 1.2;        // coarse sandstone grit that the grazing light catches
           m.transparent = true;
           m.opacity = 0;            // starts invisible, fades in on scroll
           m.depthWrite = false;
-          modelMats.push(m);
+          // push mesh fragments back a hair so the coplanar contour lines (built from
+          // this same geometry) pass the depth test without z-fighting
+          m.polygonOffset = true;
+          m.polygonOffsetFactor = 1;
+          m.polygonOffsetUnits = 1;
+          matMatte = m;
+          matDark = m.clone(); matDark.color.set(0x2e2c28);  // dark base under the wires
+          matHatch = m.clone(); injectHatching(matHatch);
+          // point-cloud twin (look C) shares the geometry
+          ptsObj = new THREE.Points(o.geometry, new THREE.PointsMaterial({
+            color: 0xd8d2c6, size: 0.018, sizeAttenuation: true,
+            transparent: true, opacity: 0, depthWrite: false,
+          }));
+          ptsObj.visible = false;
+          o.parent.add(ptsObj);
           // contour overlay from this mesh's geometry
           if (!edgeLines) {
-            const eg = new THREE.EdgesGeometry(o.geometry, 24);
+            // 35°: keep only strong creases (jaw, nose bridge, collar). Lower thresholds
+            // turn the noisy AI mesh into thousands of scratch-like micro segments.
+            const eg = new THREE.EdgesGeometry(o.geometry, 35);
+            // depth-tested + drawn after the mesh: only creases on the *visible* side
+            // show (back-side segments through the head read as scratch noise), and the
+            // mesh's polygonOffset keeps the coplanar lines from z-fighting it.
             edgeLines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({
               color: 0xb9a98c, transparent: true, opacity: 0
             }));
+            edgeLines.renderOrder = 2;
           }
         }
       });
@@ -198,9 +484,23 @@
       // edges were built from the raw geometry, which faces −X like the model —
       // copy rotation too or the contour renders the side profile.
       if (edgeLines) { edgeLines.scale.copy(model.scale); edgeLines.position.copy(model.position); edgeLines.rotation.copy(model.rotation); modelGroup.add(edgeLines); }
+      setLook(look); // bind material/visibility now that the mesh exists
+      // wireframe twin (look B): heavily decimated copy, pale lines over the dark base
+      gltfLoader.load(MODEL_WIRE, g2 => {
+        let wgeo = null;
+        g2.scene.traverse(o => { if (o.isMesh && !wgeo) wgeo = o.geometry; });
+        if (wgeo) {
+          wireObj = new THREE.LineSegments(new THREE.WireframeGeometry(wgeo),
+            new THREE.LineBasicMaterial({ color: 0xcfc9bb, transparent: true, opacity: 0 }));
+          wireObj.renderOrder = 1;
+          wireObj.visible = false;
+          model.add(wireObj); // same raw space as the bust (identity node transforms)
+          setLook(look);
+        }
+        dracoLoader.dispose(); // both decodes done — free the WASM worker
+      }, undefined, () => dracoLoader.dispose());
       modelReady = true;
       maybeReady();
-      dracoLoader.dispose(); // single decode — free the WASM worker
     }, undefined, e => { console.warn('GLB load failed', e); modelReady = true; maybeReady(); dracoLoader.dispose(); });
 
     // ---------- pointer parallax ----------
@@ -231,6 +531,7 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      sizeComposer();
       if (backdrop && backdropMat && backdropMat.map) frameBackdropAspect(backdropMat.map);
     });
 
@@ -242,9 +543,11 @@
 
     // ---------- loop ----------
     const clock = new THREE.Clock();
+    let tNow = 0;
     function animate() {
       requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.05);
+      tNow += dt;
 
       // ease pointer
       mouse.x += (mTarget.x - mouse.x) * 0.06;
@@ -261,26 +564,96 @@
       camera.lookAt(0, 0, 0);
 
       // ----- scroll-driven 2D -> 3D reveal -----
-      // phase A (0.0-0.45): backdrop fades/sinks, model fades in faintly, edges peak
-      // phase B (0.45-1.0): model becomes solid and comes forward, edges fade out
-      const fadeOut = smooth(0.1, 0.7, scroll);      // backdrop opacity 1->~0.35
-      if (backdropMat) backdropMat.opacity = 1 - 0.65 * fadeOut;
-      if (backdrop) backdrop.position.z = BACKDROP_Z - 2.0 * smooth(0.1, 0.9, scroll); // sink away
+      // 0.0-0.15  pure photo
+      // 0.15-0.55 glitch/blur storm: the woman plate dissolves into the empty room
+      //           while the 3D ghost materializes on the photo-head anchor
+      // 0.55-1.0  storm subsides, the bust solidifies and settles into the final pose
+      const fadeOut = smooth(0.1, 0.7, scroll);
+      const swap = smooth(0.2, 0.5, scroll);         // woman plate -> empty plate
+      if (backdropMat) {
+        // with the empty plate available the woman vanishes completely; otherwise
+        // fall back to the original partial fade
+        backdropMat.opacity = backdropEmptyMat ? 1 - swap : 1 - 0.65 * fadeOut;
+      }
+      // load-race guard: the empty plate (16KB) arrives before the woman plate (79KB);
+      // never show it bare while the woman plate is still loading
+      if (backdropEmptyMat) backdropEmptyMat.opacity = backdrop ? 1 : 0;
+      const sinkZ = BACKDROP_Z - 2.0 * smooth(0.1, 0.9, scroll); // sink away
+      if (backdrop) backdrop.position.z = sinkZ;
+      if (backdropEmpty) backdropEmpty.position.z = sinkZ - 0.01;
+      // re-frame for the new distance every frame: keeps both plates covering the
+      // viewport while they recede (depth now reads through parallax, not shrink)
+      if (backdrop && backdropMat && backdropMat.map) frameBackdropAspect(backdropMat.map);
 
-      const modelIn = smooth(0.12, 0.6, scroll);     // model opacity 0->1
-      // depthWrite only once fully opaque: off during the transparent fade, but a solid
-      // 500k-tri bust needs real self-occlusion (triangle order is not back-to-front).
-      for (const m of modelMats) { m.opacity = modelIn; m.depthWrite = modelIn > 0.99; }
+      const settle = smooth(0.35, 0.85, scroll);     // 0 = anchored in photo, 1 = final pose
+      const modelIn = smooth(0.12, 0.6, scroll);     // model fade-in 0->1
+      // While anchored the bust is a photo-scale closeup that magnifies every AI-mesh
+      // flaw (nose blob, floating hair wisp). Cap opacity at ghost level until settle
+      // shrinks it toward the final size, and only then let it solidify.
+      const modelOp = modelIn * (0.45 + 0.55 * settle);
+      // per-look endings: B keeps a faint pale body under the wires, C keeps a
+      // dusting of particles on the statue, D reveals the lit statue through the
+      // print (uReveal). A stays the full matte statue.
+      const solidIn = (look === 'C') ? smooth(0.5, 0.85, scroll) : 1;
+      let solidOp = modelOp * solidIn;
+      if (look === 'B' && matDark) {
+        solidOp = modelOp * (1 - 0.82 * settle);        // ends ~0.18 — ghost body
+        matDark.color.setScalar(0.18 + 0.5 * settle);   // storm-dark → pale plaster
+      }
+      if (theMesh) {
+        // depthWrite on almost immediately: the ghost stays a single clean front
+        // surface (photo still blends through via alpha), back-side faces/lines get
+        // z-culled, and the solid bust self-occludes (triangle order ≠ back-to-front).
+        theMesh.material.opacity = solidOp;
+        theMesh.material.depthWrite = solidOp > 0.2;
+      }
+      if (wireObj && look === 'B') wireObj.material.opacity = modelIn * (0.95 - 0.2 * settle);
+      if (ptsObj && look === 'C') {
+        // points stack ~2 deep per pixel, so perceived alpha ≈ 1-(1-a)^2 — go low
+        ptsObj.material.opacity = modelIn * (1 - solidIn * 0.92);
+        ptsObj.material.size = 0.018 * (1 - 0.4 * settle); // and finer dust at rest
+      }
+      if (matHatch) matHatch.userData.uReveal.value = 0.22 * settle;
       modelGroup.position.z = -1.2 + 1.6 * smooth(0.2, 1.0, scroll); // come forward
+
+      // ----- anchor the bust onto the photo's head, settle into the final pose -----
+      // The emergence only reads if the 3D head rises out of the photographed head, so
+      // project the head's image position onto the bust's z-plane every frame (tracks
+      // viewport resizes and the sinking backdrop) and blend pose → centered/front.
+      let aX = 0, aY = 0, aS = 1, aYaw = 0;
+      if (backdrop) {
+        const k = (camera.position.z - modelGroup.position.z) /
+                  (camera.position.z - backdrop.position.z);
+        const vC = (PHOTO_HEAD.vTop + PHOTO_HEAD.vBottom) / 2;
+        const headH = (PHOTO_HEAD.vBottom - PHOTO_HEAD.vTop) * backdrop.scale.y * k;
+        const s0 = headH / MODEL_HEAD_H;
+        aS = s0 + (1 - s0) * settle;
+        // include the plate's face-anchored offset so the anchor tracks the crop
+        const px = (PHOTO_HEAD.u - 0.5) * backdrop.scale.x + backdrop.position.x;
+        const py = (0.5 - vC) * backdrop.scale.y + backdrop.position.y;
+        // full camera ray: point = cam + (P - cam) * k — the cam*(1-k) terms keep the
+        // registration exact while mouse parallax moves the camera off the origin
+        aX = (px * k + camera.position.x * (1 - k) - MODEL_HEAD_X * s0) * (1 - settle);
+        aY = (py * k + camera.position.y * (1 - k) - MODEL_HEAD_OFF * s0) * (1 - settle);
+        aYaw = PHOTO_HEAD.yaw * (1 - settle);
+      }
+      modelGroup.position.x = aX;
+      modelGroup.position.y = aY;
+      modelGroup.scale.setScalar(aS);
 
       // contour overlay: peaks around the mid transition then fades
       if (edgeLines) {
-        const e = smooth(0.12, 0.4, scroll) * (1 - smooth(0.5, 0.75, scroll));
-        edgeLines.material.opacity = 0.5 * e;
+        // alive only during the ghost double-exposure; fully gone by the time the
+        // bust solidifies (its micro-segments read as dust on the clean statue)
+        const e = smooth(0.12, 0.4, scroll) * (1 - smooth(0.42, 0.58, scroll));
+        // attenuate by magnification — at photo-anchor scale the overlay would
+        // otherwise read as scratchy noise instead of contour drawing
+        edgeLines.material.opacity = 0.5 * e / Math.max(1, aS);
       }
 
-      // model micro-rotation: mouse + scroll, clamped to ±MAX_ROT
-      const ry = Math.max(-MAX_ROT, Math.min(MAX_ROT, mouse.x * MAX_ROT * 1.2));
+      // model micro-rotation: anchor yaw (photo pose) eases out while the clamped
+      // mouse parallax takes over.
+      const ry = aYaw + Math.max(-MAX_ROT, Math.min(MAX_ROT, mouse.x * MAX_ROT * 1.2));
       const rx = Math.max(-MAX_ROT * 0.6, Math.min(MAX_ROT * 0.6, -mouse.y * MAX_ROT * 0.6));
       modelGroup.rotation.y += (ry - modelGroup.rotation.y) * 0.06;
       modelGroup.rotation.x += (rx - modelGroup.rotation.x) * 0.06;
@@ -291,7 +664,15 @@
       cap3.classList.toggle('show', scroll >= 0.78);
       hint.style.display = scroll > 0.05 ? 'none' : '';
 
-      renderer.render(scene, camera);
+      // glitch storm peaks while the plates swap, with a live flicker so holding
+      // the scroll position still feels unstable; blur is wider and slightly later
+      const bell = (a, m, b, x) => smooth(a, m, x) * (1 - smooth(m, b, x));
+      const g = bell(0.14, 0.34, 0.55, scroll);
+      glitchPass.uniforms.uGlitch.value = g * (0.75 + 0.25 * Math.sin(tNow * 7.3) * Math.sin(tNow * 3.1));
+      glitchPass.uniforms.uBlur.value = 0.85 * bell(0.16, 0.38, 0.62, scroll);
+      glitchPass.uniforms.uTime.value = tNow;
+
+      composer.render();
     }
     animate();
     onScroll();
