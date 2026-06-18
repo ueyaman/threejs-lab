@@ -17,6 +17,7 @@
       --green: #5cc98a;
       --amber: #e0b341;
       --red: #e06c75;
+      --violet: #b48ef0;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { scroll-behavior: smooth; }
@@ -54,7 +55,7 @@
       letter-spacing: -0.01em; line-height: 1.1;
     }
     .hero h1 .dot { color: var(--accent-2); }
-    .hero p { color: var(--muted); margin-top: 0.8rem; font-size: 0.95rem; max-width: 46ch; }
+    .hero p { color: var(--muted); margin-top: 0.8rem; font-size: 0.95rem; max-width: 48ch; }
     .hero-links { margin-top: 1.3rem; display: flex; gap: 0.6rem; flex-wrap: wrap; }
     .pill {
       display: inline-flex; align-items: center; gap: 0.4rem;
@@ -76,13 +77,13 @@
       margin-top: 2rem;
       display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
       background: var(--panel); border: 1px solid var(--border);
-      border-left: 3px solid var(--amber);
+      border-left: 3px solid var(--green);
       border-radius: 10px; padding: 0.9rem 1.1rem;
       font-size: 0.86rem;
     }
     .banner .tag {
       font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase;
-      color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+      color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
       padding: 0.15rem 0.55rem; border-radius: 6px; white-space: nowrap;
     }
     .banner span { color: var(--muted); }
@@ -109,7 +110,20 @@
     }
     .metric .val { font-size: 2rem; font-weight: 700; color: var(--text); line-height: 1; }
     .metric .val.accent { color: var(--accent); }
+    .metric .val.green { color: var(--green); }
+    .metric .val.amber { color: var(--amber); }
     .metric .lbl { color: var(--muted); font-size: 0.76rem; margin-top: 0.45rem; }
+
+    /* ---------- Progress bars ---------- */
+    .bars { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.8rem; }
+    .bar-row { display: flex; flex-direction: column; gap: 0.35rem; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 0.8rem; }
+    .bar-label .k { color: var(--muted); }
+    .bar-label .v { color: var(--text); font-weight: 600; }
+    .track { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+    .fill { height: 100%; border-radius: 999px; }
+    .fill.green { background: linear-gradient(90deg, var(--green), #7fe0a8); }
+    .fill.accent { background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
 
     /* ---------- Info grid ---------- */
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
@@ -126,17 +140,37 @@
     .kv .v a { color: var(--accent); text-decoration: none; }
     .kv .v a:hover { text-decoration: underline; }
 
+    /* ---------- Timeline ---------- */
+    .timeline { position: relative; margin-left: 0.4rem; padding-left: 1.6rem; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 1.1rem; }
+    .tl-item { position: relative; }
+    .tl-item .dot {
+      position: absolute; left: calc(-1.6rem - 6px); top: 0.25rem;
+      width: 11px; height: 11px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 0 4px var(--bg);
+    }
+    .tl-item.now .dot { background: var(--amber); box-shadow: 0 0 0 4px var(--bg), 0 0 0 7px color-mix(in srgb, var(--amber) 35%, transparent); }
+    .tl-date { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.04em; }
+    .tl-title { font-size: 0.92rem; font-weight: 600; color: var(--text); margin-top: 0.1rem; }
+    .tl-title .chip { font-size: 0.62rem; vertical-align: middle; margin-left: 0.45rem; padding: 0.08rem 0.42rem; border-radius: 5px; letter-spacing: 0.04em; }
+    .chip.pub { color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 45%, transparent); }
+    .chip.loc { color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); }
+    .tl-desc { font-size: 0.79rem; color: var(--muted); margin-top: 0.2rem; }
+
     /* ---------- File tree ---------- */
     .tree {
       background: var(--panel); border: 1px solid var(--border);
       border-radius: 10px; padding: 1.2rem 1.3rem; font-size: 0.86rem;
     }
-    .tree .row { display: flex; align-items: center; gap: 0.5rem; padding: 0.28rem 0; }
+    .tree .row { display: flex; align-items: center; gap: 0.5rem; padding: 0.28rem 0; flex-wrap: wrap; }
     .tree .indent { padding-left: 1.6rem; }
     .tree .fname { color: var(--text); }
     .tree .fdesc { color: var(--muted); font-size: 0.78rem; margin-left: 0.4rem; }
     .tree .badge-new {
       font-size: 0.64rem; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+      padding: 0.05rem 0.4rem; border-radius: 5px; margin-left: 0.5rem;
+    }
+    .tree .badge-ign {
+      font-size: 0.64rem; color: var(--muted); border: 1px solid var(--border);
       padding: 0.05rem 0.4rem; border-radius: 5px; margin-left: 0.5rem;
     }
 
@@ -147,7 +181,7 @@
       text-transform: uppercase; letter-spacing: 0.08em;
       padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border);
     }
-    tbody td { padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody td { padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
     tbody tr:last-child td { border-bottom: none; }
     tbody tr { transition: background .15s; }
     tbody tr:hover { background: var(--panel-2); }
@@ -159,10 +193,34 @@
       display: inline-flex; align-items: center; gap: 0.35rem;
       font-size: 0.74rem; padding: 0.18rem 0.55rem; border-radius: 6px; white-space: nowrap;
     }
-    .status.done { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+    .status.pub { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+    .status.loc { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
     .status.todo { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
     .status .led { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-    .tablewrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .tablewrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; overflow-x: auto; }
+
+    /* ---------- 05 spotlight: life ring ---------- */
+    .spotlight {
+      background:
+        radial-gradient(600px 240px at 15% -20%, rgba(224,108,117,0.12), transparent 60%),
+        var(--panel);
+      border: 1px solid var(--border); border-radius: 12px; padding: 1.4rem 1.4rem;
+    }
+    .spot-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+    .spot-top h3 { font-size: 1rem; color: var(--text); }
+    .spot-top .em { font-size: 1.2rem; }
+    .spot-sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 1.1rem; }
+    .ring { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.3rem; }
+    .ring .stage {
+      font-size: 0.78rem; padding: 0.3rem 0.6rem; border-radius: 7px;
+      border: 1px solid var(--border); background: var(--panel-2); color: var(--text); white-space: nowrap;
+    }
+    .ring .arr { color: var(--muted); font-size: 0.8rem; }
+    .ring .loop { color: var(--red); font-weight: 700; }
+    .spot-meta { margin-top: 1.2rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.7rem; }
+    .spot-meta .m { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.8rem; }
+    .spot-meta .m .v { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+    .spot-meta .m .l { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
 
     /* ---------- Roadmap ---------- */
     .roadmap { list-style: none; display: flex; flex-direction: column; gap: 0.7rem; }
@@ -171,12 +229,15 @@
       background: var(--panel); border: 1px solid var(--border);
       border-radius: 10px; padding: 0.85rem 1.1rem; font-size: 0.88rem;
     }
+    .roadmap li.hot { border-left: 3px solid var(--amber); }
     .roadmap .box {
       flex-shrink: 0; width: 16px; height: 16px; margin-top: 0.18rem;
       border: 1.5px solid var(--muted); border-radius: 4px;
     }
+    .roadmap li.hot .box { border-color: var(--amber); }
     .roadmap .txt { color: var(--text); }
     .roadmap .txt small { display: block; color: var(--muted); font-size: 0.76rem; margin-top: 0.15rem; }
+    .roadmap .opt { font-size: 0.64rem; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 0.05rem 0.4rem; margin-left: 0.4rem; }
 
     /* ---------- Flow ---------- */
     .flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.82rem; }
@@ -203,7 +264,7 @@
       <div class="hero-text">
         <div class="eyebrow">Project Status Report</div>
         <h1>Three<span class="dot">.</span>js Lab</h1>
-        <p>Three.js を使ったビジュアル実験のプレイグラウンド。実験ごとに独立した HTML ファイルとして管理し、GitHub push → Vercel 自動デプロイで即公開する。</p>
+        <p>Three.js を使ったビジュアル実験のプレイグラウンド。実験ごとに独立した HTML ファイルとして管理し、GitHub push → Vercel 自動デプロイで即公開する。最近は「画像 → 生成 AI → 3D / 連番スクラブ」へと表現が拡張中。</p>
         <div class="hero-links">
           <a class="pill" href="https://threejs-lab-ashen.vercel.app/" target="_blank" rel="noopener"><span class="ic">🌐</span> 公開サイト</a>
           <a class="pill" href="https://github.com/ueyaman/threejs-lab" target="_blank" rel="noopener"><span class="ic">⌥</span> GitHub</a>
@@ -217,25 +278,72 @@
   <div class="wrap">
 
     <!-- ===== STATUS BANNER ===== -->
-    <div class="banner" style="border-left-color: var(--green)">
-      <span class="tag" style="color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent)">Active</span>
-      <span><b>実験 2 件</b>（01 公開済み / 02 ローカル完成）。02 はローカルコミット済み・<b style="color:var(--green)">明日ローカル確認 → push 予定</b>。</span>
+    <div class="banner">
+      <span class="tag">Active</span>
+      <span><b>実験 5 件すべて完成</b>。01–04 は Vercel 公開済み。最新作 <b style="color:var(--amber)">05「生命の輪」はローカル完成</b>・未コミット（push はユーザー指示待ち）。<br><span style="color:var(--muted)">2026-06-17 更新: 05 のアクション/モーフの手足 smear を <b style="color:var(--text)">Seedance 2.0 で 7 クリップ再生成</b>しクリーン化・フレームのキャッシュバスター実装・デバッグパネル削除（詳細 <code>docs/260617/STATUS.md</code>）。</span></span>
     </div>
 
     <!-- ===== METRICS ===== -->
     <section>
-      <div class="sec-head"><span class="num">01</span><h2>サマリー</h2><span class="hint">2026-06-09 時点</span></div>
+      <div class="sec-head"><span class="num">01</span><h2>サマリー</h2><span class="hint">2026-06-17 時点</span></div>
       <div class="metrics">
-        <div class="metric"><div class="val accent">2</div><div class="lbl">実験（01 / 02）</div></div>
-        <div class="metric"><div class="val">7</div><div class="lbl">HTML / MD ファイル</div></div>
-        <div class="metric"><div class="val">2</div><div class="lbl">Git コミット（ローカル）</div></div>
-        <div class="metric"><div class="val" style="color:var(--green)">Live</div><div class="lbl">Vercel（01 公開中）</div></div>
+        <div class="metric"><div class="val accent">5</div><div class="lbl">実験（全て完成）</div></div>
+        <div class="metric"><div class="val green">4</div><div class="lbl">公開中（Vercel / 01–04）</div></div>
+        <div class="metric"><div class="val amber">1</div><div class="lbl">push 待ち（05・ローカル完成）</div></div>
+        <div class="metric"><div class="val">10</div><div class="lbl">Git コミット（最終 06-12）</div></div>
+      </div>
+      <div class="bars">
+        <div class="bar-row">
+          <div class="bar-label"><span class="k">実験の完成度</span><span class="v">5 / 5 ・ 100%</span></div>
+          <div class="track"><div class="fill green" style="width:100%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label"><span class="k">公開（デプロイ）進捗</span><span class="v">4 / 5 ・ 80%（05 は push 待ち）</span></div>
+          <div class="track"><div class="fill accent" style="width:80%"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== TIMELINE ===== -->
+    <section>
+      <div class="sec-head"><span class="num">02</span><h2>進捗タイムライン</h2><span class="hint">2月セットアップ → 6月に集中</span></div>
+      <div class="timeline">
+        <div class="tl-item">
+          <span class="dot"></span>
+          <div class="tl-date">2026-02-27</div>
+          <div class="tl-title">01 Rotating Cube <span class="chip pub">公開</span></div>
+          <div class="tl-desc">初期セットアップ。MeshStandard + Ambient/Point ライトの基本シーン。</div>
+        </div>
+        <div class="tl-item">
+          <span class="dot"></span>
+          <div class="tl-date">2026-06-09 〜 06-10</div>
+          <div class="tl-title">02 Photo Terrain <span class="chip pub">公開</span></div>
+          <div class="tl-desc">画像の明暗を高さにした 3D レリーフ。OrbitControls・マウス追従ライト・画像 D&amp;D・プロシージャル fallback。</div>
+        </div>
+        <div class="tl-item">
+          <span class="dot"></span>
+          <div class="tl-date">2026-06-10</div>
+          <div class="tl-title">03 Mona Lisa Warp <span class="chip pub">公開</span></div>
+          <div class="tl-desc">マウスで引きずって歪ませる頂点バネ物理（中村勇吾 tha オマージュ）。位置ドラッグ + 低剛性バネで粘る質感。</div>
+        </div>
+        <div class="tl-item">
+          <span class="dot"></span>
+          <div class="tl-date">2026-06-11 〜 06-12</div>
+          <div class="tl-title">04 Emergent Portrait <span class="chip pub">公開</span></div>
+          <div class="tl-desc">スクロールで写真の人物が消え、同じ場所に 3D 肖像が浮上。生成AI→Tripo3D、投影アンカー、4ルック切替、Seedance i2v「生きた写真」背景 + ベイク AO。</div>
+        </div>
+        <div class="tl-item now">
+          <span class="dot"></span>
+          <div class="tl-date">2026-06-14 〜 06-16 ・ <b style="color:var(--amber)">現在地</b></div>
+          <div class="tl-title">05 Emergent Life <span class="chip loc">ローカル完成・push 待ち</span></div>
+          <div class="tl-desc">手塚調の「生命の輪」。卵→ヒト→動物→魚→卵を巡る 846 フレームの連番スクラブ。全アクション/モーフをローカル ComfyUI / Wan2.2 で 0 クレジット生成。本体・フレーム・index/README の更新が未コミット。</div>
+        </div>
       </div>
     </section>
 
     <!-- ===== OVERVIEW + STACK ===== -->
     <section>
-      <div class="sec-head"><span class="num">02</span><h2>プロジェクト情報</h2></div>
+      <div class="sec-head"><span class="num">03</span><h2>プロジェクト情報</h2></div>
       <div class="grid-2">
         <div class="panel">
           <h3>BASICS</h3>
@@ -243,8 +351,8 @@
           <div class="kv"><span class="k">公開 URL</span><span class="v"><a href="https://threejs-lab-ashen.vercel.app/" target="_blank" rel="noopener">threejs-lab-ashen.vercel.app</a></span></div>
           <div class="kv"><span class="k">リポジトリ</span><span class="v"><a href="https://github.com/ueyaman/threejs-lab" target="_blank" rel="noopener">ueyaman/threejs-lab</a></span></div>
           <div class="kv"><span class="k">ブランチ</span><span class="v">master</span></div>
-          <div class="kv"><span class="k">最終コミット</span><span class="v">2026-06-09（ローカル）</span></div>
-          <div class="kv"><span class="k">未 push</span><span class="v">02 実験ほか（明日確認後）</span></div>
+          <div class="kv"><span class="k">最終コミット</span><span class="v">2026-06-12（04 Phase 2）</span></div>
+          <div class="kv"><span class="k">未コミット</span><span class="v">05 本体 + 846 フレーム / index・README・lessons・.gitignore</span></div>
         </div>
         <div class="panel">
           <h3>TECH STACK</h3>
@@ -252,63 +360,160 @@
           <div class="kv"><span class="k">読み込み</span><span class="v">CDN / importmap (jsDelivr)</span></div>
           <div class="kv"><span class="k">ビルド</span><span class="v">なし（ブラウザ直接実行）</span></div>
           <div class="kv"><span class="k">ホスティング</span><span class="v">Vercel（自動デプロイ）</span></div>
+          <div class="kv"><span class="k">素材生成</span><span class="v">nano banana pro / Tripo3D / Seedance / ローカル ComfyUI・Wan2.2</span></div>
           <div class="kv"><span class="k">命名規則</span><span class="v"><code>NN-kebab-case.html</code></span></div>
         </div>
       </div>
     </section>
 
-    <!-- ===== FILE STRUCTURE ===== -->
-    <section>
-      <div class="sec-head"><span class="num">03</span><h2>構成</h2></div>
-      <div class="tree">
-        <div class="row"><span>📁</span><span class="fname">threejs-lab/</span></div>
-        <div class="row indent"><span>📄</span><span class="fname">index.html</span><span class="fdesc">— 実験一覧（カード形式ポータル）</span></div>
-        <div class="row indent"><span>🧊</span><span class="fname">01-rotating-cube.html</span><span class="fdesc">— 基本: 回転するキューブ</span></div>
-        <div class="row indent"><span>🗿</span><span class="fname">02-photo-terrain.html</span><span class="fdesc">— 画像地形化（明暗→高さのレリーフ）</span><span class="badge-new">新規</span></div>
-        <div class="row indent"><span>🖼️</span><span class="fname">assets/02-portrait.jpg</span><span class="fdesc">— 02 の初期画像（原寸・ローカルのみ）</span><span class="badge-new" style="color:var(--muted);border-color:var(--border)">gitignore</span></div>
-        <div class="row indent"><span>💡</span><span class="fname">docs/260609/draftIdea.md</span><span class="fdesc">— 02 の企画メモ（ChatGPT 由来）</span></div>
-        <div class="row indent"><span>📚</span><span class="fname">tasks/lessons.md</span><span class="fdesc">— 実装で得た再利用可能な教訓</span><span class="badge-new">新規</span></div>
-        <div class="row indent"><span>📊</span><span class="fname">project-status.html</span><span class="fdesc">— このステータス資料</span></div>
-        <div class="row indent"><span>📝</span><span class="fname">README.md</span><span class="fdesc">— プロジェクト説明（ローカル実行手順あり）</span></div>
-        <div class="row indent"><span>🚫</span><span class="fname">.gitignore</span><span class="fdesc">— ライセンス素材・作業ゴミを除外</span><span class="badge-new">新規</span></div>
-      </div>
-    </section>
-
     <!-- ===== EXPERIMENTS ===== -->
     <section>
-      <div class="sec-head"><span class="num">04</span><h2>実験一覧</h2><span class="hint">2 / 2 完成</span></div>
+      <div class="sec-head"><span class="num">04</span><h2>実験一覧</h2><span class="hint">5 / 5 完成 ・ 4 公開</span></div>
       <div class="tablewrap">
         <table>
           <thead>
-            <tr><th style="width:48px">#</th><th>ファイル</th><th>内容</th><th style="width:110px">状態</th></tr>
+            <tr><th style="width:42px">#</th><th>ファイル</th><th>内容</th><th style="width:120px">状態</th></tr>
           </thead>
           <tbody>
             <tr>
               <td class="exp-id">01</td>
               <td class="exp-file"><a href="01-rotating-cube.html">01-rotating-cube.html</a></td>
               <td>回転するキューブ（MeshStandard + Ambient/Point ライト）</td>
-              <td><span class="status done"><span class="led"></span>完成</span></td>
+              <td><span class="status pub"><span class="led"></span>公開中</span></td>
             </tr>
             <tr>
               <td class="exp-id">02</td>
               <td class="exp-file"><a href="02-photo-terrain.html">02-photo-terrain.html</a></td>
               <td>画像地形化 — 明暗を高さにした 3D レリーフ。マウス追従ライト / OrbitControls / 画像 D&amp;D / プロシージャル fallback</td>
-              <td><span class="status done"><span class="led"></span>完成（ローカル）</span></td>
+              <td><span class="status pub"><span class="led"></span>公開中</span></td>
             </tr>
             <tr>
               <td class="exp-id">03</td>
-              <td class="exp-file" style="color:var(--muted)">— 未着手 —</td>
-              <td style="color:var(--muted)">パーティクル分解 / シェーダー波形 / 物理 など（テーマ未定）</td>
-              <td><span class="status todo"><span class="led"></span>予定</span></td>
+              <td class="exp-file"><a href="03-mona-lisa-warp.html">03-mona-lisa-warp.html</a></td>
+              <td>画像をマウスで引きずって歪ませる頂点バネ物理（中村勇吾 tha オマージュ / グリッド可視化 / 画像 D&amp;D）</td>
+              <td><span class="status pub"><span class="led"></span>公開中</span></td>
+            </tr>
+            <tr>
+              <td class="exp-id">04</td>
+              <td class="exp-file"><a href="04-emergent-portrait.html">04-emergent-portrait.html</a></td>
+              <td>浮上する肖像 — スクロールで写真の人物が消え、同じ場所に 3D 肖像が浮上。生成AI→Tripo3D / 投影アンカー / 4ルック切替（石膏・ワイヤー・点群・版画）/ Seedance i2v「生きた写真」背景 + ベイク AO</td>
+              <td><span class="status pub"><span class="led"></span>公開中</span></td>
+            </tr>
+            <tr>
+              <td class="exp-id">05</td>
+              <td class="exp-file"><a href="05-emergent-life.html">05-emergent-life.html</a></td>
+              <td>生命の輪 — スクロールで 卵→桑実胚→胚→胎芽→赤ん坊→子供→大人→哺乳類→爬虫類→両生類→魚→卵 を一巡する手描きセル調の連番スクラブ。846 フレーム webp・窓ロードで VRAM 固定 / 純2D contain / 暖→冷→暖の色グレード・赤い生命コア</td>
+              <td><span class="status loc"><span class="led"></span>ローカル完成<br>push 待ち</span></td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
+    <!-- ===== 05 SPOTLIGHT ===== -->
+    <section>
+      <div class="sec-head"><span class="num">05</span><h2>最新作スポットライト</h2><span class="hint">05 Emergent Life</span></div>
+      <div class="spotlight">
+        <div class="spot-top"><span class="em">🥚</span><h3>生命の輪 — 個体発生 ↔ 系統発生の反復</h3></div>
+        <div class="spot-sub">スクロールで連番をスクラブし、卵から人へ、人から動物へ逆行し、魚を経て卵へ還る閉じた輪。色も暖→冷→暖で巡り、赤い生命コアが通奏低音として全段を貫く。</div>
+        <div class="ring">
+          <span class="stage">🥚 卵</span><span class="arr">→</span>
+          <span class="stage">桑実胚</span><span class="arr">→</span>
+          <span class="stage">胚</span><span class="arr">→</span>
+          <span class="stage">胎芽</span><span class="arr">→</span>
+          <span class="stage">👶 赤ん坊</span><span class="arr">→</span>
+          <span class="stage">子供</span><span class="arr">→</span>
+          <span class="stage">大人</span><span class="arr">→</span>
+          <span class="stage">🦍 哺乳類</span><span class="arr">→</span>
+          <span class="stage">🦎 爬虫類</span><span class="arr">→</span>
+          <span class="stage">🐸 両生類</span><span class="arr">→</span>
+          <span class="stage">🐟 魚</span><span class="arr">→</span>
+          <span class="stage loop">↻ 卵へ還る</span>
+        </div>
+        <div class="spot-meta">
+          <div class="m"><div class="v">846</div><div class="l">連番フレーム（webp）</div></div>
+          <div class="m"><div class="v">~17 MB</div><div class="l">配信フレーム総量</div></div>
+          <div class="m"><div class="v">0 cr</div><div class="l">生成コスト（ローカル ComfyUI）</div></div>
+          <div class="m"><div class="v">±16 / 26</div><div class="l">窓ロード（VRAM 固定）</div></div>
+          <div class="m"><div class="v">1200vh</div><div class="l">スクローラー高さ</div></div>
+        </div>
+        <div style="margin-top:1rem;font-size:0.78rem;color:var(--muted)">
+          人間アーク＝<b style="color:var(--text)">自意識の目覚め</b>（子供の歓喜のジャンプ→大人へマッチカット→きょろきょろ→ハッと気づき羞恥で座り込む）。動物アーク＝ゴリラが胸を叩き寝転ぶ→トカゲが這う→カエルが高く跳んで頭から水面にダイブ（波紋）→魚→卵へ。
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== GENERATION PIPELINE ===== -->
+    <section>
+      <div class="sec-head"><span class="num">06</span><h2>素材生成パイプライン</h2><span class="hint">04 / 05 の生成 AI 素材</span></div>
+      <div class="panel">
+        <div class="flow">
+          <span class="step">① キーフレーム生成<br><small style="color:var(--muted)">nano banana pro</small></span>
+          <span class="arrow">→</span>
+          <span class="step">② 3D化 / 動画化<br><small style="color:var(--muted)">Tripo3D・Seedance・ローカル Wan2.2</small></span>
+          <span class="arrow">→</span>
+          <span class="step">③ 軽量化<br><small style="color:var(--muted)">Draco・WebP・連番化（ffmpeg）</small></span>
+          <span class="arrow">→</span>
+          <span class="step" style="border-color:var(--green);color:var(--green)">④ 配信用だけコミット<br><small style="color:color-mix(in srgb,var(--green) 70%,white)">中間素材は .gitignore</small></span>
+        </div>
+        <div style="margin-top:0.9rem;font-size:0.78rem;color:#9a9aa4">
+          重い中間素材（原寸 PNG・無圧縮 GLB・生成 mp4・クリップ連番）は <code>.gitignore</code> で公開リポジトリから除外。配信用に最適化したものだけをコミットする（例: 04 は合計ロード 32.6MB → 1.86MB に削減）。
+          クラウドが NSFW で弾く生成は、<b style="color:var(--text)">稼働中のローカル ComfyUI を直接叩いて 0 クレジット</b>で逃がす運用に到達（05 の全動画）。
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== FILE STRUCTURE ===== -->
+    <section>
+      <div class="sec-head"><span class="num">07</span><h2>構成</h2></div>
+      <div class="tree">
+        <div class="row"><span>📁</span><span class="fname">threejs-lab/</span></div>
+        <div class="row indent"><span>📄</span><span class="fname">index.html</span><span class="fdesc">— 実験一覧（カード形式ポータル）</span><span class="badge-new">05 追記・未コミット</span></div>
+        <div class="row indent"><span>🧊</span><span class="fname">01-rotating-cube.html</span><span class="fdesc">— 基本: 回転するキューブ</span></div>
+        <div class="row indent"><span>🗿</span><span class="fname">02-photo-terrain.html</span><span class="fdesc">— 画像地形化（明暗→高さのレリーフ）</span></div>
+        <div class="row indent"><span>🖼️</span><span class="fname">03-mona-lisa-warp.html</span><span class="fdesc">— マウスで引きずる頂点バネ歪み</span></div>
+        <div class="row indent"><span>👤</span><span class="fname">04-emergent-portrait.html</span><span class="fdesc">— 写真から浮上する 3D 肖像</span></div>
+        <div class="row indent"><span>🥚</span><span class="fname">05-emergent-life.html</span><span class="fdesc">— 生命の輪（連番スクラブ）</span><span class="badge-new">新規・未コミット</span></div>
+        <div class="row indent"><span>🎞️</span><span class="fname">assets/05-frames/</span><span class="fdesc">— 846 webp + manifest.json（配信用・~17MB）</span><span class="badge-new">新規・未コミット</span></div>
+        <div class="row indent"><span>🖼️</span><span class="fname">assets/（04 素材ほか）</span><span class="fdesc">— Draco GLB・WebP 背景・i2v mp4・ベイク AO</span></div>
+        <div class="row indent"><span>💡</span><span class="fname">docs/260609–260616/</span><span class="fdesc">— 各実験の企画・生成中間素材</span><span class="badge-ign">一部 gitignore</span></div>
+        <div class="row indent"><span>📚</span><span class="fname">tasks/lessons.md</span><span class="fdesc">— 実装で得た再利用可能な教訓（05 分を追記）</span><span class="badge-new">更新・未コミット</span></div>
+        <div class="row indent"><span>📊</span><span class="fname">project-status.html</span><span class="fdesc">— このステータス資料</span></div>
+        <div class="row indent"><span>📝</span><span class="fname">README.md</span><span class="fdesc">— プロジェクト説明（ローカル実行手順あり）</span><span class="badge-new">更新・未コミット</span></div>
+        <div class="row indent"><span>🚫</span><span class="fname">.gitignore</span><span class="fdesc">— ライセンス素材・重い中間素材・作業ゴミを除外</span><span class="badge-new">更新・未コミット</span></div>
+      </div>
+    </section>
+
+    <!-- ===== ROADMAP ===== -->
+    <section>
+      <div class="sec-head"><span class="num">08</span><h2>残タスク</h2><span class="hint">優先順</span></div>
+      <ul class="roadmap">
+        <li class="hot">
+          <span class="box"></span>
+          <span class="txt"><b style="color:var(--amber)">05「生命の輪」をローカル確認 → コミット & push</b><small>本体 <code>05-emergent-life.html</code> + <code>assets/05-frames/</code>（846 枚）+ <code>index.html</code>・<code>README.md</code>・<code>tasks/lessons.md</code>・<code>.gitignore</code> の更新が未コミット。方針により <b>push はユーザーの明示指示があったときだけ</b>実施する（現状は意図的なローカル止め）。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt"><code>index.html</code> のサムネイルを実際のキャプチャ画像に差し替え<span class="opt">任意</span><small>現在は絵文字プレースホルダ（📦🗿🖼️👤🥚）。各実験の代表フレームに置換すると一覧の見栄えが向上。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">02 改良案<small>高さマップ用ぼかしを表示テクスチャと分離 / 等高線オーバーレイ / スクロール連動の立ち上がり。詳細は <code>tasks/lessons.md</code>。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">03 改良案<small><code>SEG_X</code> を上げる場合は <code>pos.array</code> 直接アクセスへ切替（getX/setX のコスト回避）。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
+          <span class="txt">06 次の実験テーマを決めて追加<small>テーマ未定。パーティクル / シェーダー / 物理 など。</small></span>
+        </li>
+      </ul>
+    </section>
+
     <!-- ===== WORKFLOW ===== -->
     <section>
-      <div class="sec-head"><span class="num">05</span><h2>デプロイフロー</h2></div>
+      <div class="sec-head"><span class="num">09</span><h2>デプロイフロー</h2></div>
       <div class="panel">
         <div class="flow">
           <span class="step">① 新実験 HTML を作成</span>
@@ -321,37 +526,14 @@
         </div>
         <div style="margin-top:0.9rem;font-size:0.78rem;color:#9a9aa4">
           ローカル確認: <code>py -m http.server 8000</code> →
-          <code>http://127.0.0.1:8000/</code>（importmap と canvas 読取のため <code>file://</code> 直開きは不可）
+          <code>http://127.0.0.1:8000/</code>（importmap の CDN 読込と canvas ピクセル取得のため <code>file://</code> 直開きは不可）。
         </div>
       </div>
     </section>
 
-    <!-- ===== ROADMAP ===== -->
-    <section>
-      <div class="sec-head"><span class="num">06</span><h2>次にやること</h2></div>
-      <ul class="roadmap">
-        <li>
-          <span class="box" style="border-color:var(--green)"></span>
-          <span class="txt"><b style="color:var(--green)">【明日】02 をローカルで確認</b><small><code>py -m http.server 8000</code> → <code>http://127.0.0.1:8000/02-photo-terrain.html</code>。マウスでライト探索・ドラッグで回転・画像 D&amp;D を確認。</small></span>
-        </li>
-        <li>
-          <span class="box"></span>
-          <span class="txt">確認 OK なら <code>git push</code> → Vercel 公開<small>公開版は原寸画像なし（gitignore）＝プロシージャル地形にフォールバック。<code>docs/draftIdea.md</code> を公開するか push 前に判断。</small></span>
-        </li>
-        <li>
-          <span class="box"></span>
-          <span class="txt">03 の実験テーマを決めて追加<small>パーティクル分解 / シェーダー波形 / 物理シミュレーションなど。</small></span>
-        </li>
-        <li>
-          <span class="box"></span>
-          <span class="txt">02 改良案<small>高さマップ用ぼかしを表示テクスチャと分離 / 等高線オーバーレイ / スクロール連動の立ち上がり。詳細は <code>tasks/lessons.md</code> 参照。</small></span>
-        </li>
-      </ul>
-    </section>
-
     <footer>
       <span>Three.js Lab — Project Status Report</span>
-      <span>更新: 2026-06-09（実験 02 追加時点）</span>
+      <span>更新: 2026-06-17（05 ローカル完成時点）</span>
     </footer>
   </div>
 

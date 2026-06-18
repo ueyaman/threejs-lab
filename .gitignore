@@ -23,3 +23,17 @@ assets/04-portrait.orig.glb
 assets/04-portrait.fixed.glb
 assets/04-backdrop-empty.src.png
 assets/*.src.mp4
+
+# 05 Emergent Life — heavy intermediates & working notes kept local. The repo ships
+# only 05-emergent-life.html + assets/05-frames/*.webp + assets/05-frames/manifest.json.
+# (docs/**/{STATUS,draftIdea,*-inquiry}.md are already covered by the globs above.)
+assets/05-src/
+docs/260614/keyframes/
+docs/260615/keyframes/
+docs/260615/PLAN.md
+docs/260615/wan-actions.md
+docs/260616/keyframes/
+assets/05-frames.bak/
+# 05 verification screenshots (throwaway)
+05-arc-*.jpeg
+05-verify-*.jpeg

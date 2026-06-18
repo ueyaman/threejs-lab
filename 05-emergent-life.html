@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 - Emergent Life | Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root { --accent: #7cf; --border: #2a2a32; }
+    html, body { height: 100%; }
+    body { background: #05050a; overflow-x: hidden; font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: #e8e8ea; }
+    canvas { display: block; }
+
+    /* fixed full-screen stage; the page scrolls behind it to scrub frames */
+    #stage {
+      position: fixed; inset: 0; z-index: 1;
+      touch-action: pan-y; /* let vertical touch scroll; we read it as scrub */
+    }
+    /* tall invisible scroller — its height is the scrub track length.
+       More height = each wheel notch advances fewer frames = slower scrub.
+       1800vh (1.5x the previous 1200vh) gives the 846-frame loop — now with extra
+       action beats — more travel so a single wheel spin doesn't race past them. */
+    #scroller { position: relative; width: 100%; height: 1800vh; z-index: 0; pointer-events: none; }
+
+    #back {
+      position: fixed; top: 1rem; left: 1rem; z-index: 10;
+      color: var(--accent); font-size: 0.85rem; text-decoration: none;
+      background: rgba(0,0,0,0.5); padding: 0.3rem 0.6rem;
+      border-radius: 4px; border: 1px solid var(--border);
+    }
+    #back:hover { border-color: var(--accent); }
+
+    #caption {
+      position: fixed; bottom: 1rem; left: 1rem; z-index: 10;
+      font-size: 0.75rem; color: #9a9aa4; line-height: 1.55;
+      background: rgba(0,0,0,0.4); padding: 0.5rem 0.75rem;
+      border-radius: 6px; border: 1px solid var(--border); max-width: 64vw;
+    }
+    #caption b { color: var(--accent); font-weight: 600; }
+    #caption .tag {
+      display: inline-block; margin-top: 0.3rem; font-size: 0.66rem;
+      color: #d8b070; border: 1px solid #5a4a2a; border-radius: 4px; padding: 0.05rem 0.35rem;
+    }
+
+    /* scroll hint, fades out once the user starts scrubbing */
+    #hint {
+      position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%);
+      z-index: 10; font-size: 0.72rem; color: #9a9aa4; letter-spacing: 0.08em;
+      background: rgba(0,0,0,0.4); padding: 0.35rem 0.7rem; border-radius: 20px;
+      border: 1px solid var(--border); transition: opacity .6s; pointer-events: none;
+    }
+    #hint.hide { opacity: 0; }
+
+
+    #loading {
+      position: fixed; inset: 0; z-index: 20; display: flex;
+      align-items: center; justify-content: center; background: #05050a;
+      color: #9a9aa4; font-size: 0.85rem; transition: opacity .5s; letter-spacing: 0.05em;
+    }
+    #loading.hide { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="scroller"></div>
+
+  <a id="back" href="index.html">← 一覧へ</a>
+
+  <div id="caption">
+    <b>05 · Emergent Life</b> — 卵子から胎児へ、スクロールで進む連番スクラブ<br>
+    縦スクロール=パラパラ送り（手描きセル調・フラット）
+    <span class="tag" id="modetag">procedural placeholder</span>
+  </div>
+
+  <div id="hint">SCROLL ↓ / DRAG で送る</div>
+
+  <div id="loading">loading…</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ============================================================
+    // 05 Emergent Life — harness (phase 1)
+    // Scroll-driven frame-sequence scrub (flipbook) + luminance
+    // pseudo-depth parallax. Real Seedance frames drop into
+    // assets/05-frames/ (manifest.json); until then a procedural
+    // egg->fetus morph stands in. Final-frame -> 3D handoff is a
+    // later phase (see PHASE 7 hook at the bottom).
+    // ============================================================
+
+    // ---------- config ----------
+    const PLANE_W = 3.0, PLANE_H = 4.0;     // 3:4 portrait (matches Seedance i2v aspect)
+    const SEG_W = 200;                       // plane subdivisions; relief resolution
+    const SEG_H = Math.round(SEG_W * PLANE_H / PLANE_W);
+    const FRAME_DIR = 'assets/05-frames/';   // real frames live here (manifest.json + frame_####.webp)
+    const PROC_FRAMES = 72;                   // virtual frame count in procedural mode
+    // Windowed frame loading: the full life-cycle loop is ~320 frames; holding all of
+    // them as GPU textures would cost ~600MB+ VRAM. Instead keep a sliding window —
+    // load ±WIN_LOAD around the cursor, dispose textures beyond ±WIN_KEEP.
+    const WIN_LOAD = 16;   // load radius around the current frame
+    const WIN_KEEP = 26;   // dispose radius (hysteresis > WIN_LOAD to avoid thrash)
+
+    // ---------- scene ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000); // pure black so contain-fit letterbox bars are seamless with the plate edges
+
+    const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+    let camDist = 7;
+    camera.position.set(0, 0, camDist);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    document.getElementById('stage').appendChild(renderer.domElement);
+
+    // ---------- displaced plane (the "2.5D" frame) ----------
+    // The current frame is sampled in the VERTEX shader; brighter pixels push
+    // toward the camera, so a small camera parallax reveals real relief. Dark
+    // (background) pixels are cut to a flat back plane (luminance key), giving the
+    // 2-layer subject/background separation for free.
+    const uniforms = {
+      uFrame:   { value: makePlaceholderTex() },
+      uDepth:   { value: 0.0 },   // flat by default: this is hand-drawn cel art — luminance relief only added ragged silhouette edges
+      uBgCut:   { value: 0.12 },
+      uGrain:   { value: 0.06 },
+      uTime:    { value: 0 },
+      uAspect:  { value: 1 }, // texture aspect / plane aspect, to cover-fit the UVs
+      uFill:    { value: 1.40 }, // >1 shrinks the subject toward center; texture's black border (clamped) fills the margin
+      uWarm:    { value: 1.0 },  // scroll-driven warmth: 1=warm amber (egg/human) -> 0=cold teal (fish). Closes the color loop warm->cool->warm
+      uGrade:   { value: 0.55 }, // master strength of the global grade (0=off). Deliberately subtle — anchors carry the palette; this is a through-line
+    };
+
+    const planeMat = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: /* glsl */`
+        uniform sampler2D uFrame;
+        uniform float uDepth;
+        uniform float uBgCut;
+        uniform float uFill;
+        varying vec2 vUv;
+        varying vec2 vFuv;
+        varying float vLum;
+        float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+        void main(){
+          vUv = uv;
+          // shrink the subject toward center; the texture's black border (clamped)
+          // fills the margin, so the object reads smaller on a clean black field
+          vFuv = (uv - 0.5) * uFill + 0.5;
+          vec3 col = texture2D(uFrame, vFuv).rgb;
+          float l = luma(col);
+          vLum = l;
+          // subject (bright) pops forward; background (dark) stays flat at the back
+          float d = smoothstep(uBgCut, 1.0, l);
+          vec3 p = position;
+          p.z += d * uDepth;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D uFrame;
+        uniform float uGrain;
+        uniform float uTime;
+        uniform float uWarm;
+        uniform float uGrade;
+        varying vec2 vUv;
+        varying vec2 vFuv;
+        varying float vLum;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main(){
+          // mask the uFill shrink margin (vFuv outside [0,1]) so ClampToEdge can't replicate a
+          // subject touching a source edge into streaks (the frog high-jump apex "bars to the
+          // frame edge"). Applied to the texture + luminance ember but NOT the grain, so the
+          // margin keeps the same faint film grain as the plate (no visible rectangle seam).
+          // Enforces the "source four sides are pure black" precondition in-shader.
+          vec2 ib = smoothstep(vec2(0.0), vec2(0.004), vFuv) * smoothstep(vec2(0.0), vec2(0.004), 1.0 - vFuv);
+          float inb = ib.x * ib.y;
+          vec3 col = texture2D(uFrame, vFuv).rgb * inb;
+          // subtle vignette for mood / depth cue
+          float vig = 1.0 - smoothstep(0.5, 1.15, length(vUv - 0.5) * 1.6);
+          col *= mix(0.78, 1.0, vig);
+          // film grain (toggleable)
+          float g = (hash(vUv * 1024.0 + uTime) - 0.5) * uGrain;
+          col += g;
+          // subtle scroll-driven global grade: warm at the egg/human stages, cooling toward
+          // the fish (coldest), warming again as the loop closes back to the egg. Amplitude is
+          // deliberately tiny — the baked-in anchor palettes carry the color; this only nudges
+          // the warm->cool->warm through-line so the cycle also "closes" chromatically.
+          vec3 warmTint = vec3(1.05, 1.00, 0.93);
+          vec3 coolTint = vec3(0.95, 1.00, 1.07);
+          vec3 tint = mix(coolTint, warmTint, clamp(uWarm, 0.0, 1.0));
+          col *= mix(vec3(1.0), tint, uGrade);
+          // keep a warm "life core" ember: lift the brightest pixels (the glowing core/rim)
+          // a hair toward amber regardless of stage, so the fire never fully goes out
+          col += vec3(0.04, 0.012, 0.0) * smoothstep(0.55, 1.0, vLum) * uGrade * inb;
+          // fade the outermost rim to pure black so the plate's edges are seamless
+          // against the pure-black scene background when contain-fitted (and kills grain there)
+          float edge = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
+          col *= smoothstep(0.0, 0.035, edge);
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    });
+
+    const planeGeo = new THREE.PlaneGeometry(PLANE_W, PLANE_H, SEG_W, SEG_H);
+    const plane = new THREE.Mesh(planeGeo, planeMat);
+    scene.add(plane);
+
+    // wireframe overlay (debug): shows the displaced relief
+    const wireMat = new THREE.MeshBasicMaterial({ color: 0x7ccfff, wireframe: true, transparent: true, opacity: 0.22 });
+    const wire = new THREE.Mesh(planeGeo, planeMat.clone()); // clone shares displacement via same uniforms below
+    wire.material = new THREE.ShaderMaterial({
+      uniforms, // SAME uniforms object -> identical displacement
+      vertexShader: planeMat.vertexShader,
+      fragmentShader: /* glsl */`
+        varying vec2 vUv; varying float vLum;
+        void main(){ gl_FragColor = vec4(0.49, 0.81, 1.0, 0.22); }`,
+      wireframe: true, transparent: true,
+    });
+    wire.visible = false;
+    wire.position.z = 0.001;
+    scene.add(wire);
+
+    // ---------- 1px placeholder so the sampler is never null before frames load
+    function makePlaceholderTex() {
+      const t = new THREE.DataTexture(new Uint8Array([8, 8, 12, 255]), 1, 1, THREE.RGBAFormat);
+      t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
+      return t;
+    }
+
+    // ---------- contain-fit framing ----------
+    // Distance where the WHOLE 3:4 plane fits inside the viewport (letterbox/pillarbox
+    // with black bars — seamless since both the bars and the plate edges are black).
+    // max(dH,dW) = the farther of the two fit distances. Cover-fit cropped the tall
+    // figures (head/feet) on wide monitors; contain guarantees the subject is never cut.
+    function frameCover() {
+      const vFOV = camera.fov * Math.PI / 180;
+      const dH = (PLANE_H / 2) / Math.tan(vFOV / 2);
+      const hFOV = 2 * Math.atan(Math.tan(vFOV / 2) * camera.aspect);
+      const dW = (PLANE_W / 2) / Math.tan(hFOV / 2);
+      camDist = Math.max(dH, dW) * 1.02;   // *1.02 = a hair of margin around the plate
+    }
+
+    // ============================================================
+    // Frame source — real (Seedance) or procedural placeholder
+    // ============================================================
+    let MODE = 'proc';            // 'proc' | 'real'
+    let FRAME_COUNT = PROC_FRAMES;
+    let frames = [];              // real-mode: (Texture | 'loading' | null)[], windowed
+    let frameUrls = [];           // real-mode: full URL per frame index
+    let texLoader = null;         // real-mode: shared TextureLoader
+    let procCanvas = null, procCtx = null, procTex = null;
+    let curFrame = -1;
+
+    function setFrame(i) {
+      i = Math.max(0, Math.min(FRAME_COUNT - 1, i | 0));
+      if (i === curFrame) return;
+      curFrame = i;
+      if (MODE === 'real') {
+        ensureWindow(i);
+        const t = frames[i];
+        if (t && t !== 'loading') uniforms.uFrame.value = t;
+        // else: keep showing the previous frame; loadFrameTex() swaps this index in
+        // the instant it finishes decoding (see the i === curFrame check there).
+      } else {
+        // Boot race: scroll events can fire while the manifest/first frame is still loading,
+        // when MODE is still the default 'proc' but initProcedural() hasn't built the canvas yet.
+        // Ignore the scrub until boot is ready — finalizeBoot() redraws the current position.
+        if (!procTex) return;
+        drawProcFrame(procCtx, procCanvas.width, procCanvas.height, i / (FRAME_COUNT - 1));
+        procTex.needsUpdate = true;
+        uniforms.uFrame.value = procTex;
+      }
+    }
+
+    // ---------- procedural egg -> fetus morph (placeholder) ----------
+    // Drawn into ONE reused canvas (cheap: no N-texture preload). A bright head
+    // bulb plus a tapering, curling spine: t=0 reads as a single egg/zygote, the
+    // tail grows and curls into a fetal C as t->1. Dark background -> clean
+    // luminance key. Pale luminous core -> good pseudo-depth relief.
+    function drawProcFrame(ctx, W, H, t) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#05050a';
+      ctx.fillRect(0, 0, W, H);
+
+      const cx = W * 0.5, cy = H * 0.5, scale = Math.min(W, H);
+
+      // faint amniotic halo — gives the "background" some midtone so depth/parallax
+      // is visible on non-subject pixels too (and reads as a sac around the form)
+      const halo = ctx.createRadialGradient(cx, cy, scale * 0.05, cx, cy, scale * 0.62);
+      halo.addColorStop(0, 'rgba(60,70,110,0.30)');
+      halo.addColorStop(1, 'rgba(8,8,14,0.0)');
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, W, H);
+
+      // additive blobs, kept below clip so the core->edge falloff survives as a
+      // luminance gradient (that gradient IS the pseudo-depth relief; a blown-out
+      // flat-white subject would displace as a flat-topped mesa with no volume)
+      ctx.globalCompositeOperation = 'lighter';
+      const blob = (x, y, r, b) => {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0,   'rgba(' + (150 * b | 0) + ',' + (158 * b | 0) + ',' + (188 * b | 0) + ',0.58)');
+        g.addColorStop(0.5, 'rgba(' + (96 * b | 0)  + ',' + (104 * b | 0) + ',' + (140 * b | 0) + ',0.26)');
+        g.addColorStop(1,   'rgba(30,36,70,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
+      };
+
+      // head bulb grows a touch and drifts up as the body curls under it
+      const headR = scale * (0.105 + 0.055 * t);
+      const headX = cx, headY = cy - scale * 0.07 * t;
+
+      // tapering spine, Euler-integrated along a turning tangent (curl eases in)
+      const segs = 30;
+      const bodyLen = scale * (0.015 + 0.64 * t);
+      const curl = t * t * 2.7;              // total turn (radians) across the tail
+      const step = bodyLen / segs;
+      let x = headX, y = headY + headR * 0.55, dir = Math.PI * 0.5; // start below head, point down
+      for (let i = 1; i <= segs; i++) {
+        const u = i / segs;
+        dir += curl / segs;
+        x += Math.cos(dir) * step;
+        y += Math.sin(dir) * step;
+        const r = scale * 0.092 * (1 - u * 0.72);   // taper toward the tail
+        blob(x, y, r, 0.95 - 0.32 * u);
+      }
+      // head last = brightest core (strongest forward relief)
+      blob(headX, headY, headR, 1.0);
+
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    function initProcedural() {
+      MODE = 'proc'; FRAME_COUNT = PROC_FRAMES;
+      procCanvas = document.createElement('canvas');
+      procCanvas.width = 432; procCanvas.height = 576;  // 3:4, light backing store
+      procCtx = procCanvas.getContext('2d');
+      procTex = new THREE.CanvasTexture(procCanvas);
+      procTex.colorSpace = THREE.SRGBColorSpace;
+      uniforms.uAspect.value = 1; // canvas is already 3:4 == plane, no UV cover needed
+      finalizeBoot();
+    }
+
+    // ---------- real frames (Seedance, later) ----------
+    async function bootFrames() {
+      try {
+        const r = await fetch(FRAME_DIR + 'manifest.json', { cache: 'no-cache' });
+        if (!r.ok) throw new Error('no manifest');
+        const m = await r.json();
+        await loadRealFrames(m);
+      } catch (e) {
+        initProcedural();           // license-free, zero-asset fallback
+      }
+    }
+
+    let onFrameError = null;
+
+    function loadRealFrames(m) {
+      return new Promise((resolve) => {
+        const count = m.count | 0;
+        const ext = m.ext || 'webp';
+        const pad = m.pad || 4;
+        const ver = m.ver ? ('?v=' + m.ver) : '';   // cache-buster from manifest (frame_*.webp keep stable names across rebuilds)
+        texLoader = new THREE.TextureLoader();
+        FRAME_COUNT = count;
+        frames = new Array(count).fill(null);
+        frameUrls = new Array(count);
+        for (let i = 0; i < count; i++) {
+          frameUrls[i] = FRAME_DIR + 'frame_' + String(i + 1).padStart(pad, '0') + '.' + ext + ver;
+        }
+        const tagEl = document.getElementById('modetag');
+        let failed = false;
+        // first-frame 404 (manifest present but frames missing) -> graceful proc fallback
+        onFrameError = () => { if (!failed) { failed = true; initProcedural(); resolve(); } };
+        ensureWindow(0);                 // start loading the window around frame 0
+        const waitFirst = () => {        // reveal the scene once frame 0 has decoded
+          if (failed) return;
+          if (frames[0] && frames[0] !== 'loading') {
+            MODE = 'real';
+            if (tagEl) tagEl.textContent = count + ' real frames (windowed)';
+            resolve();
+            finalizeBoot();
+          } else {
+            setTimeout(waitFirst, 30);
+          }
+        };
+        waitFirst();
+      });
+    }
+
+    function loadFrameTex(i) {
+      if (i < 0 || i >= FRAME_COUNT || frames[i]) return;  // out of range, or already loaded/loading
+      frames[i] = 'loading';
+      texLoader.load(frameUrls[i], (tex) => {
+        // The cursor may have scrubbed far away while this frame was decoding. ensureWindow's
+        // dispose loop skips 'loading' entries, so a late arrival that lands outside the keep
+        // window would otherwise be stranded — leaking GPU memory if the user stops there
+        // (the windowed loader's whole point is to bound VRAM). Reclaim it immediately.
+        if (i !== curFrame && (i < curFrame - WIN_KEEP || i > curFrame + WIN_KEEP)) {
+          tex.dispose();
+          frames[i] = null;
+          return;
+        }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+        frames[i] = tex;
+        if (i === curFrame) uniforms.uFrame.value = tex;   // we were waiting on exactly this frame
+      }, undefined, () => { frames[i] = null; if (onFrameError) onFrameError(); });
+    }
+
+    // Sliding window: load [c-WIN_LOAD, c+WIN_LOAD], dispose textures beyond [c-WIN_KEEP, c+WIN_KEEP].
+    // The currently displayed texture is never disposed (avoids a black flash on fast scrub jumps).
+    function ensureWindow(center) {
+      const lo = Math.max(0, center - WIN_LOAD), hi = Math.min(FRAME_COUNT - 1, center + WIN_LOAD);
+      for (let i = lo; i <= hi; i++) loadFrameTex(i);
+      const klo = center - WIN_KEEP, khi = center + WIN_KEEP;
+      for (let i = 0; i < FRAME_COUNT; i++) {
+        if ((i < klo || i > khi) && frames[i] && frames[i] !== 'loading' && frames[i] !== uniforms.uFrame.value) {
+          frames[i].dispose();
+          frames[i] = null;
+        }
+      }
+    }
+
+    // ---------- scroll scrub ----------
+    let scroll = 0; // 0..1
+    let hintHidden = false;
+    function onScroll() {
+      const max = document.body.scrollHeight - innerHeight;
+      scroll = max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0;
+      setFrame(Math.round(scroll * (FRAME_COUNT - 1)));
+      // scroll-driven warmth for the subtle global grade. Warm through the egg/human stages,
+      // cooling toward the fish (coldest ~0.9), warming back as the loop closes to the egg (->1).
+      const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+      const cool = ss(0.50, 0.90, scroll), warmClose = ss(0.94, 1.0, scroll);
+      uniforms.uWarm.value = (1 - cool) * (1 - warmClose) + warmClose;
+      if (!hintHidden && scroll > 0.02) {
+        hintHidden = true;
+        document.getElementById('hint').classList.add('hide');
+      }
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    // ---------- pointer parallax ----------
+    const mTarget = new THREE.Vector2(0, 0);
+    const mouse = new THREE.Vector2(0, 0);
+    window.addEventListener('pointermove', (e) => {
+      mTarget.x = (e.clientX / innerWidth) * 2 - 1;
+      mTarget.y = -(e.clientY / innerHeight) * 2 + 1;
+    });
+
+    // ---------- helpers ----------
+    // Debug param panel removed (tuning done). Values are fixed at the tuned defaults
+    // in `uniforms` (uDepth 0 / uBgCut 0.12 / uFill 1.40 / uGrade 0.55 / uGrain 0.06)
+    // and paraAmt below; the wireframe overlay stays hidden (wire.visible = false).
+    const $ = id => document.getElementById(id);
+    const paraAmt = 0.20;   // pointer parallax amount (was a debug slider)
+
+    // ---------- resize ----------
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      frameCover();
+    });
+
+    // ---------- loading ----------
+    const loadingEl = $('loading');
+    let loadingHidden = false;
+    function hideLoading() {
+      if (!loadingHidden) { loadingHidden = true; loadingEl.classList.add('hide'); }
+    }
+    setTimeout(hideLoading, 8000); // safety reveal
+
+    function finalizeBoot() {
+      frameCover();
+      curFrame = -1;
+      onScroll();          // set the frame for the current scroll position
+      setFrame(Math.round(scroll * (FRAME_COUNT - 1)));
+      hideLoading();
+    }
+
+    // ---------- loop ----------
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      uniforms.uTime.value += dt;
+
+      // ease pointer, then offset the camera for parallax (lookAt center tilts it,
+      // so the luminance relief shifts layer-by-layer = the 2.5D depth read)
+      mouse.x += (mTarget.x - mouse.x) * 0.06;
+      mouse.y += (mTarget.y - mouse.y) * 0.06;
+      camera.position.x = mouse.x * paraAmt;
+      camera.position.y = mouse.y * paraAmt * 0.75;
+      camera.position.z = camDist;
+      camera.lookAt(0, 0, 0);
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // ============================================================
+    // PHASE 7 hook (later): at scroll≈1 the last frame holds; cross-
+    // fade a single Tripo GLB (silhouette/angle/light matched) over
+    // it here for the "becomes a touchable 3D object" payoff.
+    // ============================================================
+
+    // ---------- boot ----------
+    frameCover();
+    bootFrames();
+
+    // ---------- debug handle (Playwright / console) ----------
+    window.__dbg = {
+      get mode() { return MODE; },
+      get frame() { return curFrame; },
+      get count() { return FRAME_COUNT; },
+      get scroll() { return scroll; },
+      setScroll(p) {                       // 0..1 -> scroll the page + scrub
+        const max = document.body.scrollHeight - innerHeight;
+        scrollTo(0, Math.round(p * max)); onScroll();
+      },
+      setMouse(x, y) { mTarget.set(x, y); }, // -1..1
+      // live = decoded frame textures held in JS; gpu = textures resident in the renderer.
+      // Both must stay bounded (~2*WIN_KEEP) even after a fast scrub-then-stop (windowed loader).
+      get liveTextures() { return MODE === 'real' ? frames.reduce((n, f) => n + (f && f !== 'loading' ? 1 : 0), 0) : 0; },
+      get gpuTextures() { return renderer.info.memory.textures; },
+      uniforms,
+    };
+  </script>
+</body>
+</html>
