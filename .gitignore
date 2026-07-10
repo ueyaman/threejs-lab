@@ -3,6 +3,7 @@
 # procedural texture + drag-and-drop upload, so no licensed file is redistributed.
 docs/**/AdobeStock_*.jpeg
 docs/**/AdobeStock_*.jpg
+docs/**/AdobeStock_*.png
 assets/02-portrait.jpg
 
 # Verification / tooling artifacts
@@ -37,3 +38,30 @@ assets/05-frames.bak/
 # 05 verification screenshots (throwaway)
 05-arc-*.jpeg
 05-verify-*.jpeg
+
+# Secrets — NEVER commit. Copy .env.example -> .env and fill keys locally.
+.env
+.env.local
+.env.*.local
+
+# 06 Cat Skeleton — candidate GLBs from image-to-3D kept local (derived from licensed
+# source images). The repo will ship only the final optimized 06 GLB + html.
+docs/260618/*.glb
+!docs/260618/cat_skeleton_anim.glb
+docs/260618/*.blend
+docs/260618/*.blend1
+# 06 throwaway GLB-inspection contact sheets / browser verification screenshots
+glb-*.jpeg
+cat-*.png
+06-*.png
+cat-v*.jpeg
+# 06 local-only debug page — panels reference GLBs that are gitignored above,
+# so a clean checkout would 404. Keep local.
+compare-skeletons.html
+
+# Report verification screenshots (throwaway)
+report-*.png
+
+# 07 verification screenshots / exported PNGs (throwaway)
+07-*.png
+street_*.png
