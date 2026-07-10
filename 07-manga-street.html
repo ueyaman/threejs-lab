@@ -134,6 +134,9 @@ const PARAMS = {
   rain: 0,                // 雨の強さ 0-1(空・雨線・水たまり・傘に連動)
   exposure: 1.0,
   fov: 48, eyeH: 1.5, roll: 0,
+  vpSnap: false,          // 消失点スナップ(yaw を最寄りの 90° 軸へ吸着)
+  horizonLock: false,     // 水平線ロック(pitch=0)
+  windowFrame: false,     // 窓越しフレーム(室内から見た構図)
   mode: 'clay',           // clay / line / tone
   lineWidth: 1, ss2x: true, nearBoost: true,
   toneGain: 1.0, tonePitch: 5,
@@ -1673,6 +1676,7 @@ function stateToHash() {
   let h = `#s=${PARAMS.seed}&t=${PARAMS.hour}&cam=${p}&fov=${PARAMS.fov}&roll=${PARAMS.roll}` +
           `&mode=${PARAMS.mode}&ar=${encodeURIComponent(PARAMS.aspect)}`;
   if (PARAMS.rain > 0) h += `&rain=${PARAMS.rain}`;
+  if (PARAMS.windowFrame) h += `&wf=1`;
   for (const k of GEN_KEYS) {
     if (PARAMS[k] !== GEN_DEFAULTS[k]) h += `&${k}=${encodeURIComponent(PARAMS[k])}`;
   }
@@ -1685,6 +1689,7 @@ function parseHash() {
   if (q.get('s')) PARAMS.seed = parseInt(q.get('s')) || PARAMS.seed;
   if (q.get('t')) PARAMS.hour = clamp(parseFloat(q.get('t')) || 13, 4, 24);
   if (q.get('rain')) PARAMS.rain = clamp(parseFloat(q.get('rain')) || 0, 0, 1);
+  if (q.get('wf') === '1') PARAMS.windowFrame = true;
   if (q.get('fov')) PARAMS.fov = clamp(parseFloat(q.get('fov')) || 48, 20, 100);
   if (q.get('roll')) PARAMS.roll = clamp(parseFloat(q.get('roll')) || 0, -15, 15);
   if (q.get('mode') && ['clay', 'line', 'tone'].includes(q.get('mode'))) PARAMS.mode = q.get('mode');
@@ -1861,6 +1866,7 @@ function applyCamera() {
   cam.pos.y = PARAMS.eyeH;
   camera.position.copy(cam.pos);
   camera.quaternion.setFromEuler(new THREE.Euler(cam.pitch, cam.yaw, THREE.MathUtils.degToRad(PARAMS.roll), 'YXZ'));
+  updateWindowFrame();
 }
 
 const cv = renderer.domElement;
@@ -1891,6 +1897,18 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyR') { PARAMS.seed = (Math.random() * 1e9) | 0; regenerate(); syncPanel(); }
 });
 addEventListener('keyup', e => keys[e.code] = false);
+
+/* 構図補助: 消失点スナップ(最寄りの 90° 軸へイーズ吸着)+水平線ロック */
+function applyCompositionAids(dt) {
+  if (PARAMS.vpSnap && !dragging) {
+    const q = Math.round(cam.yaw / (Math.PI / 2)) * (Math.PI / 2);
+    const d = q - cam.yaw;
+    if (Math.abs(d) < 0.22) cam.yaw += d * Math.min(1, dt * 9);
+  }
+  if (PARAMS.horizonLock && !dragging) {
+    cam.pitch += (0 - cam.pitch) * Math.min(1, dt * 9);
+  }
+}
 
 function moveCamera(dt) {
   const sp = (keys.ShiftLeft || keys.ShiftRight ? 12 : 4.2) * dt;
@@ -1942,6 +1960,9 @@ const SCHEMA = [
     { k: 'fov', label: 'FOV', type: 'range', min: 20, max: 100, step: 1, unit: '°' },
     { k: 'eyeH', label: '目線高さ', type: 'range', min: 0.4, max: 12, step: 0.1, unit: 'm' },
     { k: 'roll', label: 'ロール', type: 'range', min: -15, max: 15, step: 0.5, unit: '°' },
+    { k: 'vpSnap', label: '消失点スナップ', type: 'check' },
+    { k: 'horizonLock', label: '水平線ロック', type: 'check' },
+    { k: 'windowFrame', label: '窓越しフレーム', type: 'check' },
   ]},
   { sec: '線画・トーン(出力)', open: false, items: [
     { k: 'lineWidth', label: '線幅', type: 'range', min: 0, max: 2, step: 1 },
@@ -2006,6 +2027,27 @@ function buildPanel() {
     };
     presetRow.appendChild(b);
   }
+  // アングルプリセット(構図)
+  const angleRow = document.createElement('div');
+  angleRow.className = 'btnrow';
+  const ANGLES = [
+    ['見上げ', { eyeH: 1.1, pitch: 0.52, fov: 62 }],
+    ['目線',   { eyeH: 1.5, pitch: -0.02, fov: 48 }],
+    ['俯瞰',   { eyeH: 9.5, pitch: -0.48, fov: 40 }],
+  ];
+  for (const [label, a] of ANGLES) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {
+      PARAMS.eyeH = a.eyeH;
+      PARAMS.fov = a.fov;
+      cam.pitch = a.pitch;
+      if (Math.abs(a.pitch) > 0.01 && PARAMS.horizonLock) PARAMS.horizonLock = false;  // ロックと競合させない
+      applyLive();
+      syncPanel();
+    };
+    angleRow.appendChild(b);
+  }
   const seedCtrl = document.createElement('div');
   seedCtrl.className = 'ctrl';
   const seedLabel = document.createElement('label');
@@ -2016,7 +2058,7 @@ function buildPanel() {
   seedValEl.textContent = PARAMS.seed;
   seedLabel.append(seedName, seedValEl);
   seedCtrl.appendChild(seedLabel);
-  seedBody.append(btnrow, presetRow, seedCtrl);
+  seedBody.append(btnrow, presetRow, angleRow, seedCtrl);
   seedSec.append(seedSum, seedBody);
   panel.appendChild(seedSec);
 
@@ -2230,6 +2272,37 @@ function updateGuide(w, h, left, top) {
   mk(w / 2, h / 2 - 12, w / 2, h / 2 + 12, 0.6);
 }
 
+/* 窓越しフレーム(室内から窓外に街を見る構図。カメラの子・L0 で線画にも写る) */
+const winFrame = (() => {
+  const parts = [];
+  const t = 0.05;
+  box(parts, 0,  0.5 - t / 2, 0, 1.04, t, 0.02, 0xeceae2);      // 外枠
+  box(parts, 0, -0.5 + t / 2, 0, 1.04, t, 0.02, 0xeceae2);
+  box(parts, -0.52 + t / 2, 0, 0, t, 1, 0.02, 0xeceae2);
+  box(parts,  0.52 - t / 2, 0, 0, t, 1, 0.02, 0xeceae2);
+  box(parts, 0, 0, 0.002, 0.018, 1, 0.012, 0xd8d6ce);           // 十字桟
+  box(parts, 0, 0, 0.002, 1.04, 0.018, 0.012, 0xd8d6ce);
+  box(parts, -0.46, 0, -0.012, 0.1, 0.94, 0.014, 0xd9ccb9);     // カーテン(束ね)
+  box(parts,  0.46, 0, -0.012, 0.1, 0.94, 0.014, 0xd9ccb9);
+  // 外周の室内壁(枠の外に街が見えないよう視界の縁を覆う)
+  box(parts, 0,  1.75, 0.01, 6.4, 2.5, 0.012, 0xf0eee6);
+  box(parts, 0, -1.75, 0.01, 6.4, 2.5, 0.012, 0xf0eee6);
+  box(parts, -1.71, 0, 0.01, 2.5, 1.1, 0.012, 0xf0eee6);
+  box(parts,  1.71, 0, 0.01, 2.5, 1.1, 0.012, 0xf0eee6);
+  const geo = mergeGeometries(parts, false);
+  const mesh = new THREE.Mesh(geo, matGlass);   // unlit(照明に依らず常に見える)
+  mesh.visible = false;
+  return mesh;
+})();
+function updateWindowFrame() {
+  winFrame.visible = PARAMS.windowFrame && !topView;   // 俯瞰デバッグに写り込ませない
+  if (!winFrame.visible) return;
+  const d = 0.62;
+  const h = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * d * 2;
+  winFrame.scale.set(h * camera.aspect * 0.92, h * 0.92, 1);    // ビューの 92% を枠が覆う
+  winFrame.position.z = -d;
+}
+
 /* マネキン(1.6m スケール確認用。トグル時にカメラ前方 5m へ固定配置) */
 const mannequin = new THREE.Group();
 {
@@ -2331,6 +2404,7 @@ function tick(now) {
   lastT = now;
   if (exporting) return;   // 書き出し中はライブ描画を止める(toBlob 前の canvas 汚染防止)
   moveCamera(dt);
+  applyCompositionAids(dt);
   applyCamera();
   updateShadowBox();
   updateCrossing(dt);
@@ -2348,6 +2422,8 @@ parseHash();
 scene.add(skyDome);
 scene.add(mannequin);
 scene.add(rainFx.mesh);
+scene.add(camera);        // カメラの子(窓越しフレーム)を描画可能に
+camera.add(winFrame);
 buildPanel();
 buildModebar();
 resize();
