@@ -137,6 +137,9 @@ const PARAMS = {
   lineWidth: 1, ss2x: true, nearBoost: true,
   toneGain: 1.0, tonePitch: 5,
   aspect: 'free', guides: false, mannequin: false, exportScale: 2,
+  exportAlpha: false,     // 透過 PNG(紙を抜く。LINE/TONE のみ)
+  layerNear: 22,          // レイヤー分け書き出しの境界: 近|中(m)
+  layerMid: 70,           //                             中|遠(m)
 };
 const ROAD_W = { local: 4.5, arterial: 13 };
 
@@ -170,7 +173,7 @@ const PAL = {
    renderer / scene / camera
 ============================================================ */
 const stage = document.getElementById('stage');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });  // alpha は透過 PNG 書き出し用(表示は常に a=1)
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -628,6 +631,9 @@ const lineFinalMat = new THREE.ShaderMaterial({
     uDilate: { value: 1 },
     uPaper:  { value: new THREE.Color(0xf8f7f3) },
     uInk:    { value: new THREE.Color(0x1c1c20) },
+    uAlphaMode: { value: 0 },                          // 1=透過(紙を抜く。書き出し専用)
+    uLayerMin:  { value: 0 },                          // depth 帯マスク(far 正規化)。レイヤー分け書き出し用
+    uLayerMax:  { value: 1.02 },
   },
   vertexShader: FSQ_VERT,
   fragmentShader: /* glsl */`
@@ -635,7 +641,7 @@ const lineFinalMat = new THREE.ShaderMaterial({
     varying vec2 vUv;
     uniform sampler2D tEdge;
     uniform vec2 texelE;
-    uniform float uDilate;
+    uniform float uDilate, uAlphaMode, uLayerMin, uLayerMax;
     uniform vec3 uPaper, uInk;
     void main() {
       float e = 0.0;
@@ -643,10 +649,15 @@ const lineFinalMat = new THREE.ShaderMaterial({
         for (int dx = -2; dx <= 2; dx++) {
           float fd = max(abs(float(dx)), abs(float(dy)));
           if (fd > uDilate + 0.01) continue;
-          e = max(e, texture2D(tEdge, vUv + vec2(float(dx), float(dy)) * texelE).r);
+          vec4 s = texture2D(tEdge, vUv + vec2(float(dx), float(dy)) * texelE);
+          if (s.g >= uLayerMin && s.g < uLayerMax) e = max(e, s.r);   // g=線形深度/far
         }
       }
-      gl_FragColor = vec4(mix(uPaper, uInk, e), 1.0);
+      if (uAlphaMode > 0.5) {
+        gl_FragColor = vec4(uInk * e, e);              // premultiplied 透過(クリスタ等に直貼り)
+      } else {
+        gl_FragColor = vec4(mix(uPaper, uInk, e), 1.0);
+      }
     }
   `,
 });
@@ -662,6 +673,7 @@ const toneFinalMat = new THREE.ShaderMaterial({
     uInk:    { value: new THREE.Color(0x1c1c20) },
     uGain:   { value: 1 },
     uPitch:  { value: 5 },
+    uAlphaMode: { value: 0 },                          // 1=透過(墨のみ残す)
   },
   vertexShader: FSQ_VERT,
   fragmentShader: /* glsl */`
@@ -669,7 +681,7 @@ const toneFinalMat = new THREE.ShaderMaterial({
     varying vec2 vUv;
     uniform sampler2D tEdge, tBeauty;
     uniform vec2 texelE;
-    uniform float uDilate, uGain, uPitch;
+    uniform float uDilate, uGain, uPitch, uAlphaMode;
     uniform vec3 uPaper, uInk;
     void main() {
       float e = 0.0;
@@ -694,10 +706,18 @@ const toneFinalMat = new THREE.ShaderMaterial({
       float dotInk = density >= 0.99 ? 1.0 : (1.0 - smoothstep(radius - 0.18, radius + 0.18, d));
 
       float ink = max(e, dotInk * (density > 0.0 ? 1.0 : 0.0));
-      gl_FragColor = vec4(mix(uPaper, uInk, ink), 1.0);
+      if (uAlphaMode > 0.5) {
+        gl_FragColor = vec4(uInk * ink, ink);          // premultiplied 透過
+      } else {
+        gl_FragColor = vec4(mix(uPaper, uInk, ink), 1.0);
+      }
     }
   `,
 });
+
+edgeMat.blending = THREE.NoBlending;        // フルスクリーン quad は常に上書き
+lineFinalMat.blending = THREE.NoBlending;   // (透過書き出しで dst と混ざる事故を防ぐ)
+toneFinalMat.blending = THREE.NoBlending;
 
 const fsq = new FullScreenQuad(edgeMat);
 
@@ -790,16 +810,22 @@ function renderStylized(activeCam, tone) {
   const fm = tone ? toneFinalMat : lineFinalMat;
   fm.uniforms.tEdge.value = rtEdge.texture;
   fm.uniforms.uDilate.value = PARAMS.lineWidth;
+  fm.uniforms.uAlphaMode.value = exportAlphaMode;
   if (tone) {
     fm.uniforms.tBeauty.value = rtBeauty.texture;
     fm.uniforms.uGain.value = PARAMS.toneGain;
     fm.uniforms.uPitch.value = PARAMS.tonePitch * exportPitchScale;
+  } else {
+    fm.uniforms.uLayerMin.value = exportLayerRange[0];
+    fm.uniforms.uLayerMax.value = exportLayerRange[1];
   }
   renderer.setRenderTarget(null);
   fsq.material = fm;
   fsq.render(renderer);
 }
-let exportPitchScale = 1;   // PNG 書き出し時に網点ピッチを倍率追従させる
+let exportPitchScale = 1;        // PNG 書き出し時に網点ピッチを倍率追従させる
+let exportAlphaMode = 0;         // 1=透過書き出し中(表示は常に 0)
+let exportLayerRange = [0, 1.02];  // depth 帯(far 正規化)。レイヤー分け書き出し中のみ狭める
 
 function renderFrame(mode, activeCam) {
   if (mode === 'clay') {
@@ -1807,6 +1833,9 @@ const SCHEMA = [
     { k: 'guides', label: 'ガイド線', type: 'check' },
     { k: 'mannequin', label: 'マネキン(1.6m)', type: 'check' },
     { k: 'exportScale', label: 'PNG 倍率', type: 'select', opts: { 1: '1x', 2: '2x', 4: '4x' } },
+    { k: 'exportAlpha', label: '透過 PNG(紙を抜く)', type: 'check' },
+    { k: 'layerNear', label: 'レイヤー境界 近|中', type: 'range', min: 5, max: 60, step: 1, unit: 'm' },
+    { k: 'layerMid', label: 'レイヤー境界 中|遠', type: 'range', min: 30, max: 160, step: 5, unit: 'm' },
   ]},
 ];
 
@@ -1959,6 +1988,11 @@ function syncPanel() {
 }
 let lastAspect = PARAMS.aspect;
 function applyLive() {
+  // レイヤー境界の逆転を防ぐ(近|中 < 中|遠 を維持)
+  if (PARAMS.layerMid < PARAMS.layerNear + 5) {
+    PARAMS.layerMid = PARAMS.layerNear + 5;
+    ctrlRefs.layerMid?.input && (ctrlRefs.layerMid.input.value = PARAMS.layerMid, ctrlRefs.layerMid.updateVal?.());
+  }
   applyLight();
   applyCamera();
   if (PARAMS.aspect !== lastAspect) { lastAspect = PARAMS.aspect; resize(); }
@@ -2001,7 +2035,11 @@ function buildModebar() {
   png3.textContent = 'PNG ×3';
   png3.title = 'CLAY/LINE/TONE を一括書き出し';
   png3.onclick = () => exportPNG(['clay', 'line', 'tone']);
-  modebar.append(png1, png3);
+  const pngL = document.createElement('button');
+  pngL.textContent = '層×3';
+  pngL.title = '線画を近/中/遠の透過 PNG 3 枚に分けて書き出し(重ねると 1 枚と一致)';
+  pngL.onclick = () => exportLayers();
+  modebar.append(png1, png3, pngL);
 }
 
 /* --- HUD --- */
@@ -2099,7 +2137,8 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 8000);
 }
 let exporting = false;
-async function exportPNG(modes) {
+/* 書き出しジョブ実行。job = { mode, alpha, layer:[min,max](far正規化), suffix } */
+async function exportJobs(jobs) {
   if (exporting) return;
   exporting = true;
   const cssW = renderer.domElement.clientWidth, cssH = renderer.domElement.clientHeight;
@@ -2112,14 +2151,18 @@ async function exportPNG(modes) {
     renderer.setPixelRatio(1);
     renderer.setSize(ew, eh, false);
     exportPitchScale = ew / (cssW * pr);   // 網点ピッチを倍率追従
-    for (const m of modes) {
-      renderFrame(m, camera);
+    for (const job of jobs) {
+      exportAlphaMode = job.alpha ? 1 : 0;
+      exportLayerRange = job.layer || [0, 1.02];
+      renderFrame(job.mode, camera);
       const blob = await new Promise(res => renderer.domElement.toBlob(res, 'image/png'));
-      if (blob) downloadBlob(blob, `street_${PARAMS.seed}_${m}.png`);
+      if (blob) downloadBlob(blob, `street_${PARAMS.seed}_${job.suffix}.png`);
     }
   } finally {
     // 例外時も表示状態を必ず復元し、書き出し解像度の RT は破棄する
     exportPitchScale = 1;
+    exportAlphaMode = 0;
+    exportLayerRange = [0, 1.02];
     renderer.setPixelRatio(pr);
     renderer.setSize(cssW, cssH, false);
     disposeRTs();
@@ -2127,12 +2170,31 @@ async function exportPNG(modes) {
     renderFrame(PARAMS.mode, camera);
   }
 }
+function exportPNG(modes) {
+  return exportJobs(modes.map(m => ({
+    mode: m,
+    alpha: PARAMS.exportAlpha && m !== 'clay',   // CLAY に透過は無意味
+    suffix: m + (PARAMS.exportAlpha && m !== 'clay' ? '_alpha' : ''),
+  })));
+}
+/* レイヤー分け書き出し(LINE・透過固定): 近/中/遠の 3 枚。重ねると単発 LINE と一致する */
+function exportLayers() {
+  const far = camera.far;
+  const nf = clamp(PARAMS.layerNear, 2, far) / far;
+  const mf = Math.max(nf + 0.002, clamp(PARAMS.layerMid, 2, far) / far);
+  return exportJobs([
+    { mode: 'line', alpha: true, layer: [0, nf],    suffix: 'line_near' },
+    { mode: 'line', alpha: true, layer: [nf, mf],   suffix: 'line_mid' },
+    { mode: 'line', alpha: true, layer: [mf, 1.02], suffix: 'line_far' },
+  ]);
+}
 
 let lastT = performance.now();
 function tick(now) {
   requestAnimationFrame(tick);
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
+  if (exporting) return;   // 書き出し中はライブ描画を止める(toBlob 前の canvas 汚染防止)
   moveCamera(dt);
   applyCamera();
   updateShadowBox();
