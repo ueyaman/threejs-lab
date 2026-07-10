@@ -833,3 +833,40 @@
 ### renderer.info は「最後の render 呼び出し」の統計
 - マルチパス（G-buffer 3 枚+quad 2 枚）では draw calls が最終 quad の 1 になる。
   パフォーマンス計測はパス統合前の CLAY モードで見るか、パス毎に読む。
+
+## 2026-07-10 — 07-manga-street 拡張(issue #1〜#7 を同日消化)
+
+### 開発フロー: issue→ブランチ→実装→Playwright 検証→Bedrock-Codex レビュー→修正→PR→squash マージ→Vercel 確認
+- 1 issue 1 ブランチ(feat/issue-N-slug)で 7 件回して破綻なし。コミットに `Closes #N` で issue 自動クローズ。
+- サブスク Codex は CLI バージョン非互換(gpt-5.6-sol 要求)で全滅中 → 全レビューを
+  `CODEX_HOME=D:\claude\awsBedrock\.codex-bedrock-test AWS_REGION=us-east-1 codex exec` で実施。
+  毎回具体的な実バグを検出しており(7 件中 6 件で指摘あり)、レビュー価値は非常に高い。
+
+### ロケーション/季節追加の鉄則: 乱数消費数を変えない
+- 分岐で rr/pick の「呼び出し回数」を変えなければ、既存ロケーションの街並みは 1 区画も動かない
+  (residential plots 56 / 内訳一致で毎回実証)。レンジや配列の中身だけ変える。
+- 「生成しないなら消費だけして skip」は **全消費を終えてから continue**。pick を continue の後に
+  書く消費位置ミスを Codex に 2 回指摘された(遠景ビル・rural)。
+
+### L1 の新規 FX メッシュは scene.add を忘れる(2 連続でやった)
+- rainFx(雨筋)・petalFx(花びら/粉雪)とも「作った・updateXxx も呼んだ・でも scene.add してない」
+  で不可視。データ検証(visible/opacity)では気づけず、Codex の静的レビューが検出。
+- 対策: モジュールレベルの FX メッシュを増やしたら boot の scene.add 群に即追加。原寸クロップで
+  パーティクルの実描画を確認する(縮小スクショでは 1px 線・小スプライトが消えて見えない)。
+
+### 巨大地面プレーンは低い水面を深度で隠す
+- 420m 四方の地面(上面 y=-0.01)の下に海面(y=-0.55)を置くと完全に隠れる。夕日で照らされた
+  地面を「海が見えた」と誤認していた(Codex 検出)。水面系ロケーションでは地面の x 範囲を陸側に制限。
+
+### 「枠 box の中に面 box」は見えない/前面方向は -side
+- 中実 box(サッシ・シャッター枠)の内側に置いた box は描画されない。面 box は枠の外面より
+  僅かに(1.5cm)前へ出す。
+- 道路両側の区画で「前面(道路)方向」は `-side`。`+side` にオフセットすると両側とも建物内部に
+  埋まる(07 初版の窓が全滅していた根本原因)。`const out = -side;` を区画ビルダー冒頭で必ず定義。
+
+### 透過 PNG / レイヤー分け書き出しの要点
+- renderer は alpha:true にするが表示は常に a=1、書き出し時のみ premultiplied(vec4(ink*e, e))。
+- フルスクリーン quad 材は NoBlending 明示(透過書き出しで前フレームと混ざる事故防止)。
+- 書き出し中は tick のライブ描画を停止(await toBlob 中に rAF が canvas を汚す)。
+- depth 帯レイヤー分けは半開区間 [min,max) で欠落ゼロ。雨線など全画面エフェクトは near 層のみに
+  入れないと重ね合成で二重になる。
