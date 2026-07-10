@@ -131,6 +131,7 @@ const PARAMS = {
   // --- ライブ系 ---
   hour: 13.0,
   overcast: false,
+  rain: 0,                // 雨の強さ 0-1(空・雨線・水たまり・傘に連動)
   exposure: 1.0,
   fov: 48, eyeH: 1.5, roll: 0,
   mode: 'clay',           // clay / line / tone
@@ -441,6 +442,47 @@ function decal(D, cx, y, cz, r, hex) {
   D.push(colorize(g, hex));
 }
 
+/* --- 雨(CLAY 用 3D 雨筋。カメラ追従 wrap・L1=線画対象外) --- */
+const matPuddle = new THREE.MeshBasicMaterial({ map: gradTex, transparent: true, opacity: 0,
+  depthWrite: false, fog: false });
+const rainFx = (() => {
+  const N = 2200, R = 26, H = 15;
+  const pos = new Float32Array(N * 6);
+  const seeds = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    seeds[i * 3]     = Math.random() * R * 2 - R;
+    seeds[i * 3 + 1] = Math.random() * H;
+    seeds[i * 3 + 2] = Math.random() * R * 2 - R;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mesh = new THREE.LineSegments(geo,
+    new THREE.LineBasicMaterial({ color: 0xe6edf4, transparent: true, opacity: 0 }));
+  mesh.layers.set(1);
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return { mesh, geo, pos, seeds, N, R, H, t: 0 };
+})();
+
+function updateRain(dt) {
+  const r = PARAMS.rain;
+  rainFx.mesh.visible = r > 0.01;
+  rainFx.mesh.material.opacity = 0.22 + r * 0.3;
+  if (!rainFx.mesh.visible) return;
+  rainFx.t += dt * (9 + r * 8);
+  const { pos, seeds, N, R, H } = rainFx;
+  const len = 0.32 + r * 0.3, drift = 0.14;
+  for (let i = 0; i < N; i++) {
+    let y = (seeds[i * 3 + 1] - rainFx.t) % H;
+    if (y < 0) y += H;
+    const x = cam.pos.x + seeds[i * 3] + y * drift;
+    const z = cam.pos.z + seeds[i * 3 + 2];
+    pos[i * 6]     = x;               pos[i * 6 + 1] = y + len; pos[i * 6 + 2] = z;
+    pos[i * 6 + 3] = x - len * drift; pos[i * 6 + 4] = y;       pos[i * 6 + 5] = z;
+  }
+  rainFx.geo.attributes.position.needsUpdate = true;
+}
+
 /* --- 看板文字アトラス(canvas 1 枚。L2=albedo に素材のまま追い描き → LINE で輪郭化) --- */
 const SIGN_UV = {};
 function buildSignAtlas() {
@@ -634,6 +676,8 @@ const lineFinalMat = new THREE.ShaderMaterial({
     uAlphaMode: { value: 0 },                          // 1=透過(紙を抜く。書き出し専用)
     uLayerMin:  { value: 0 },                          // depth 帯マスク(far 正規化)。レイヤー分け書き出し用
     uLayerMax:  { value: 1.02 },
+    uRain:      { value: 0 },                          // 雨線(スクリーン空間ストローク)
+    uRainSlant: { value: 0.16 },
   },
   vertexShader: FSQ_VERT,
   fragmentShader: /* glsl */`
@@ -641,8 +685,23 @@ const lineFinalMat = new THREE.ShaderMaterial({
     varying vec2 vUv;
     uniform sampler2D tEdge;
     uniform vec2 texelE;
-    uniform float uDilate, uAlphaMode, uLayerMin, uLayerMax;
+    uniform float uDilate, uAlphaMode, uLayerMin, uLayerMax, uRain, uRainSlant;
     uniform vec3 uPaper, uInk;
+
+    float rainStroke(vec2 fc) {
+      if (uRain <= 0.005) return 0.0;
+      vec2 rp = fc;
+      rp.x += rp.y * uRainSlant;                       // 斜めに流す
+      float pitch = 7.0;
+      float colId = floor(rp.x / pitch);
+      float rnd  = fract(sin(colId * 127.1) * 43758.5453);
+      float rnd2 = fract(rnd * 91.17);
+      float y = fract(rp.y / (240.0 + rnd2 * 300.0) + rnd);   // 列ごとの位相(静止=トーンとして安定)
+      float seg  = step(y, 0.3 + 0.45 * uRain);        // 雨足の長さ
+      float thin = step(fract(rp.x / pitch), 0.15);    // 細線
+      float keep = step(rnd2, 0.2 + uRain * 0.55);     // 降る列の密度
+      return seg * thin * keep;
+    }
     void main() {
       float e = 0.0;
       for (int dy = -2; dy <= 2; dy++) {
@@ -653,6 +712,7 @@ const lineFinalMat = new THREE.ShaderMaterial({
           if (s.g >= uLayerMin && s.g < uLayerMax) e = max(e, s.r);   // g=線形深度/far
         }
       }
+      e = max(e, rainStroke(gl_FragCoord.xy) * (0.3 + 0.3 * uRain));
       if (uAlphaMode > 0.5) {
         gl_FragColor = vec4(uInk * e, e);              // premultiplied 透過(クリスタ等に直貼り)
       } else {
@@ -674,6 +734,8 @@ const toneFinalMat = new THREE.ShaderMaterial({
     uGain:   { value: 1 },
     uPitch:  { value: 5 },
     uAlphaMode: { value: 0 },                          // 1=透過(墨のみ残す)
+    uRain:      { value: 0 },
+    uRainSlant: { value: 0.16 },
   },
   vertexShader: FSQ_VERT,
   fragmentShader: /* glsl */`
@@ -681,8 +743,23 @@ const toneFinalMat = new THREE.ShaderMaterial({
     varying vec2 vUv;
     uniform sampler2D tEdge, tBeauty;
     uniform vec2 texelE;
-    uniform float uDilate, uGain, uPitch, uAlphaMode;
+    uniform float uDilate, uGain, uPitch, uAlphaMode, uRain, uRainSlant;
     uniform vec3 uPaper, uInk;
+
+    float rainStroke(vec2 fc) {
+      if (uRain <= 0.005) return 0.0;
+      vec2 rp = fc;
+      rp.x += rp.y * uRainSlant;
+      float pitch = 7.0;
+      float colId = floor(rp.x / pitch);
+      float rnd  = fract(sin(colId * 127.1) * 43758.5453);
+      float rnd2 = fract(rnd * 91.17);
+      float y = fract(rp.y / (240.0 + rnd2 * 300.0) + rnd);
+      float seg  = step(y, 0.3 + 0.45 * uRain);
+      float thin = step(fract(rp.x / pitch), 0.15);
+      float keep = step(rnd2, 0.2 + uRain * 0.55);
+      return seg * thin * keep;
+    }
     void main() {
       float e = 0.0;
       for (int dy = -2; dy <= 2; dy++) {
@@ -706,6 +783,7 @@ const toneFinalMat = new THREE.ShaderMaterial({
       float dotInk = density >= 0.99 ? 1.0 : (1.0 - smoothstep(radius - 0.18, radius + 0.18, d));
 
       float ink = max(e, dotInk * (density > 0.0 ? 1.0 : 0.0));
+      ink = max(ink, rainStroke(gl_FragCoord.xy) * (0.3 + 0.3 * uRain));
       if (uAlphaMode > 0.5) {
         gl_FragColor = vec4(uInk * ink, ink);          // premultiplied 透過
       } else {
@@ -758,11 +836,14 @@ function renderStylized(activeCam, tone) {
 
   // ⓪ TONE のみ: beauty(CLAY と同じ絵)を最終解像度 RT に(影も更新)
   if (tone) {
+    const rainWas = rainFx.mesh.visible;
+    rainFx.mesh.visible = false;          // 3D 雨筋はシェーダ雨線と二重になるため beauty から除外
     renderer.shadowMap.autoUpdate = true;
     activeCam.layers.enableAll();
     renderer.setRenderTarget(rtBeauty);
     renderer.clear();
     renderer.render(scene, activeCam);
+    rainFx.mesh.visible = rainWas;
   }
 
   renderer.shadowMap.autoUpdate = false;   // G-buffer パスに影は不要
@@ -811,6 +892,7 @@ function renderStylized(activeCam, tone) {
   fm.uniforms.tEdge.value = rtEdge.texture;
   fm.uniforms.uDilate.value = PARAMS.lineWidth;
   fm.uniforms.uAlphaMode.value = exportAlphaMode;
+  fm.uniforms.uRain.value = exportRainOverride ?? PARAMS.rain;
   if (tone) {
     fm.uniforms.tBeauty.value = rtBeauty.texture;
     fm.uniforms.uGain.value = PARAMS.toneGain;
@@ -826,6 +908,7 @@ function renderStylized(activeCam, tone) {
 let exportPitchScale = 1;        // PNG 書き出し時に網点ピッチを倍率追従させる
 let exportAlphaMode = 0;         // 1=透過書き出し中(表示は常に 0)
 let exportLayerRange = [0, 1.02];  // depth 帯(far 正規化)。レイヤー分け書き出し中のみ狭める
+let exportRainOverride = null;   // レイヤー分けで雨線を near のみに入れる(null=PARAMS.rain)
 
 function renderFrame(mode, activeCam) {
   if (mode === 'clay') {
@@ -1089,6 +1172,26 @@ function buildCity(layout) {
     dMesh.renderOrder = 5;
     group.add(dMesh);
     geos.push(dGeo);
+  }
+
+  /* --- 水たまり(雨のとき matPuddle.opacity で現れる。L1) --- */
+  const PD = [];
+  for (let i = 0; i < 16; i++) {
+    const px = rr(rngM, -roadW / 2 + 0.5, roadW / 2 - 0.5) * 0.85;
+    const pz = rr(rngM, -L / 2 + 5, L / 2 - 5);
+    decal(PD, px, 0.033, pz, rr(rngM, 0.5, 1.7), 0xffffff);
+  }
+  for (const sr of sideRoads) {
+    decal(PD, rr(rngM, -20, 20), 0.033, sr.z + rr(rngM, -1.2, 1.2), rr(rngM, 0.5, 1.3), 0xffffff);
+  }
+  {
+    const pGeo = mergeGeometries(PD, false);
+    pGeo.computeBoundingSphere();
+    const pMesh = new THREE.Mesh(pGeo, matPuddle);
+    pMesh.layers.set(1);
+    pMesh.renderOrder = 4;
+    group.add(pMesh);
+    geos.push(pGeo);
   }
   if (GLOW.pos.length) {
     const gGeo = new THREE.BufferGeometry();
@@ -1569,6 +1672,7 @@ function stateToHash() {
   const p = [cam.pos.x, cam.pos.y, cam.pos.z, cam.yaw, cam.pitch].map(v => +v.toFixed(2)).join(',');
   let h = `#s=${PARAMS.seed}&t=${PARAMS.hour}&cam=${p}&fov=${PARAMS.fov}&roll=${PARAMS.roll}` +
           `&mode=${PARAMS.mode}&ar=${encodeURIComponent(PARAMS.aspect)}`;
+  if (PARAMS.rain > 0) h += `&rain=${PARAMS.rain}`;
   for (const k of GEN_KEYS) {
     if (PARAMS[k] !== GEN_DEFAULTS[k]) h += `&${k}=${encodeURIComponent(PARAMS[k])}`;
   }
@@ -1580,6 +1684,7 @@ function parseHash() {
   const q = new URLSearchParams(h);
   if (q.get('s')) PARAMS.seed = parseInt(q.get('s')) || PARAMS.seed;
   if (q.get('t')) PARAMS.hour = clamp(parseFloat(q.get('t')) || 13, 4, 24);
+  if (q.get('rain')) PARAMS.rain = clamp(parseFloat(q.get('rain')) || 0, 0, 1);
   if (q.get('fov')) PARAMS.fov = clamp(parseFloat(q.get('fov')) || 48, 20, 100);
   if (q.get('roll')) PARAMS.roll = clamp(parseFloat(q.get('roll')) || 0, -15, 15);
   if (q.get('mode') && ['clay', 'line', 'tone'].includes(q.get('mode'))) PARAMS.mode = q.get('mode');
@@ -1701,6 +1806,15 @@ function applyLight() {
     lerpColorStops(TOP_STOPS, h, skyMat.uniforms.uTop.value);
     skyMat.uniforms.uBot.value.copy(_skyColor);
   }
+  // 雨: 太陽を潰し空をグレーへ寄せる(overcast とは独立に効く)
+  const rain = PARAMS.rain;
+  if (rain > 0) {
+    sun.intensity *= 1 - rain * 0.82;
+    hemi.intensity = lerp(hemi.intensity, Math.max(hemi.intensity, 0.9), rain * 0.7);
+    _skyColor.lerp(_c2.setHex(day ? 0xb0b6bc : 0x14181f), rain * 0.72);
+    skyMat.uniforms.uTop.value.lerp(_c2.setHex(day ? 0x969ea8 : 0x0e1218), rain * 0.72);
+    skyMat.uniforms.uBot.value.copy(_skyColor);
+  }
   hemi.groundColor.setHex(0x9a938a).multiplyScalar(Math.max(0.25, 1 - fx * 0.75));
   scene.background.copy(_skyColor);
   scene.fog.color.copy(_skyColor);
@@ -1711,6 +1825,12 @@ function applyLight() {
   matDecal.opacity = 0.5 * fx;
   matGlow.opacity = 0.95 * fx;
   updateWindowLights(fx);
+
+  // 雨 FX(水たまり・傘)
+  matPuddle.opacity = rain * 0.55;
+  matPuddle.color.copy(_skyColor).multiplyScalar(1.25 + fx * 0.6);   // 夜は街明かりの映り込み気味に
+  const umb = mannequin.getObjectByName('umbrella');
+  if (umb) umb.visible = rain > 0.01;
 }
 
 /* 影ボックスをカメラ前方に追従(テクセルスナップ) */
@@ -1817,6 +1937,7 @@ const SCHEMA = [
     { k: 'hour', label: '時刻', type: 'range', min: 4, max: 24, step: 0.25,
       fmt: v => `${Math.floor(v)}:${String(Math.round(v % 1 * 60)).padStart(2, '0')}` },
     { k: 'overcast', label: '曇天', type: 'check' },
+    { k: 'rain', label: '雨', type: 'range', min: 0, max: 1, step: 0.05, pct: true },
     { k: 'exposure', label: '露出', type: 'range', min: 0.3, max: 2.2, step: 0.05 },
     { k: 'fov', label: 'FOV', type: 'range', min: 20, max: 100, step: 1, unit: '°' },
     { k: 'eyeH', label: '目線高さ', type: 'range', min: 0.4, max: 12, step: 0.1, unit: 'm' },
@@ -2122,6 +2243,17 @@ const mannequin = new THREE.Group();
   const legR = legL.clone();
   legR.position.x = -0.09;
   mannequin.add(body, head, legL, legR);
+  // 傘(雨のとき自動表示)
+  const uMat = new THREE.MeshStandardMaterial({ color: 0x3a4450, roughness: 0.85 });
+  const canopy = new THREE.Mesh(new THREE.ConeGeometry(0.56, 0.3, 10), uMat);
+  canopy.position.y = 1.86;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.8, 6), uMat);
+  rod.position.y = 1.5;
+  const umbrella = new THREE.Group();
+  umbrella.add(canopy, rod);
+  umbrella.name = 'umbrella';
+  umbrella.visible = false;
+  mannequin.add(umbrella);
   mannequin.traverse(o => { o.castShadow = true; });
   mannequin.visible = false;
 }
@@ -2154,6 +2286,7 @@ async function exportJobs(jobs) {
     for (const job of jobs) {
       exportAlphaMode = job.alpha ? 1 : 0;
       exportLayerRange = job.layer || [0, 1.02];
+      exportRainOverride = job.rainOverride ?? null;
       renderFrame(job.mode, camera);
       const blob = await new Promise(res => renderer.domElement.toBlob(res, 'image/png'));
       if (blob) downloadBlob(blob, `street_${PARAMS.seed}_${job.suffix}.png`);
@@ -2163,6 +2296,7 @@ async function exportJobs(jobs) {
     exportPitchScale = 1;
     exportAlphaMode = 0;
     exportLayerRange = [0, 1.02];
+    exportRainOverride = null;
     renderer.setPixelRatio(pr);
     renderer.setSize(cssW, cssH, false);
     disposeRTs();
@@ -2183,9 +2317,10 @@ function exportLayers() {
   const nf = clamp(PARAMS.layerNear, 2, far) / far;
   const mf = Math.max(nf + 0.002, clamp(PARAMS.layerMid, 2, far) / far);
   return exportJobs([
+    // 雨線は手前に降るものなので near レイヤーにのみ入れる(重ね合成での重複防止)
     { mode: 'line', alpha: true, layer: [0, nf],    suffix: 'line_near' },
-    { mode: 'line', alpha: true, layer: [nf, mf],   suffix: 'line_mid' },
-    { mode: 'line', alpha: true, layer: [mf, 1.02], suffix: 'line_far' },
+    { mode: 'line', alpha: true, layer: [nf, mf],   suffix: 'line_mid', rainOverride: 0 },
+    { mode: 'line', alpha: true, layer: [mf, 1.02], suffix: 'line_far', rainOverride: 0 },
   ]);
 }
 
@@ -2199,6 +2334,7 @@ function tick(now) {
   applyCamera();
   updateShadowBox();
   updateCrossing(dt);
+  updateRain(dt);
   const activeCam = topView ? orthoCam : camera;
   renderFrame(PARAMS.mode, activeCam);
   updateHud(dt);
@@ -2211,6 +2347,7 @@ parseHash();
 
 scene.add(skyDome);
 scene.add(mannequin);
+scene.add(rainFx.mesh);
 buildPanel();
 buildModebar();
 resize();
