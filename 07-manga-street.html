@@ -118,6 +118,8 @@ const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
 ============================================================ */
 const PARAMS = {
   seed: 20260710,
+  location: 'residential',  // residential=住宅街 / shotengai=商店街
+  shutterRatio: 0.25,       // 商店街のシャッター店比率(1=シャッター街)
   roadType: 'local',      // local=4.5m / arterial=13m
   sideRoadEvery: 55,      // 側道間隔(m)
   setback: 1.2,           // 道路際余白(m)
@@ -379,9 +381,11 @@ function genLayout(P) {
     for (const row of [0, 1]) {
       const xNear = edge0 + (row === 0 ? 0 : 17.5);
       const depth = row === 0 ? rr(rng, 13, 16) : 12;
+      const isShotengai = P.location === 'shotengai';
       let pz = -L / 2 + 1.5;
       while (pz < L / 2 - 9) {
-        const w = rr(rng, 8, 12.5);
+        // 商店街の表通りは間口が狭い(rr は 1 回消費=residential の乱数列を変えない)
+        const w = (isShotengai && row === 0) ? rr(rng, 5, 8.5) : rr(rng, 8, 12.5);
         const hit = bands.find(b => pz < b.z1 && pz + w > b.z0);
         if (hit) { pz = hit.z1 + 0.4; continue; }
         if (pz + w > L / 2 - 1) break;
@@ -390,8 +394,14 @@ function genLayout(P) {
         let kind = 'house';
         if (row === 0) {
           const roll = r2();
-          if (roll < P.aptRatio) kind = 'apt';
-          else if (roll < P.aptRatio + 0.05) kind = 'lot';
+          if (isShotengai) {
+            if (roll < P.aptRatio * 0.5) kind = 'apt';
+            else if (roll < P.aptRatio * 0.5 + 0.03) kind = 'lot';
+            else kind = 'shop';
+          } else {
+            if (roll < P.aptRatio) kind = 'apt';
+            else if (roll < P.aptRatio + 0.05) kind = 'lot';
+          }
         }
         plots.push({ side, row, z0: pz, z1: pz + w, xNear, depth, sub, kind, groundY: 0 });
         pz += w + rr(rng, 0.1, 0.7);
@@ -545,6 +555,37 @@ function buildSignAtlas() {
     plate(w, h, '#3e5a80', '#f0f2f4', false);
     ctx.font = 'bold 28px "Hiragino Sans", "Yu Gothic", sans-serif';
     ctx.fillText('南町二丁目 12', w / 2, h / 2 + 1);
+  });
+  // 商店街: 袖看板の縦店名 8 種(shop0-7)
+  const SHOP_DEFS = [
+    ['たなか青果', '#eee9dc', '#2e5a38'], ['大黒屋薬局', '#e8f0ee', '#1e4a6e'],
+    ['喫茶ロマン', '#3a2e28', '#e8ddc8'], ['まる食堂',   '#f0e8da', '#8a3428'],
+    ['本の森',     '#e6eae0', '#3a4a30'], ['パンの家',   '#f2ead8', '#8a5a2e'],
+    ['花のいしだ', '#eee4ea', '#7a3a58'], ['井上金物店', '#e4e6e8', '#33383e'],
+  ];
+  SHOP_DEFS.forEach(([txt, bg, fg], i) => {
+    cell('shop' + i, 480 + i * 64, 0, 64, 256, (w, h) => {
+      plate(w, h, bg, fg, true);
+      const n = txt.length, gap = Math.min(44, (h - 60) / Math.max(1, n - 1));
+      vtext(txt, w, (h - gap * (n - 1)) / 2 + 4, 34, gap);
+    });
+  });
+  // 置き看板(A 型)
+  cell('aboard0', 0, 320, 128, 176, (w, h) => {
+    plate(w, h, '#f0ede4', '#b03a2e', true);
+    ctx.font = 'bold 30px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('本日', w / 2, 52);
+    ctx.fillText('特売', w / 2, 92);
+    ctx.font = 'bold 22px "Hiragino Sans", sans-serif';
+    ctx.fillStyle = '#3a3a3e';
+    ctx.fillText('やすい!', w / 2, 138);
+  });
+  cell('aboard1', 128, 320, 128, 176, (w, h) => {
+    plate(w, h, '#2e3438', '#f0ead8', true);
+    ctx.font = 'bold 26px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('ランチ', w / 2, 58);
+    ctx.font = 'bold 34px "Hiragino Sans", sans-serif';
+    ctx.fillText('800円', w / 2, 108);
   });
   const t = new THREE.CanvasTexture(c2);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -1043,7 +1084,7 @@ function buildCity(layout) {
     const bodyC = rngM() < 0.5 ? 0xd8dcde : 0xb43c3c;
     box(S, vx, 0.92, vz, 0.72, 1.84, 1.05, bodyC);
     box(G, vx - 0.38, 1.15, vz, 0.05, 1.05, 0.85, 0xd8e4ea);   // 前面パネル(道路向き)
-    W.push({ gi: G.length - 1, litAt: 0 });                      // 夜は常時点灯
+    W.push({ gi: G.length - 1, kind: 'vend' });                  // 夜は常時点灯
     decal(D, vx - 1.0, 0.045, vz, 2.4, 0xbfe0f0);
     GLOW.pos.push(vx - 0.42, 1.2, vz);
     GLOW.col.push(0.7, 0.88, 1);
@@ -1053,6 +1094,28 @@ function buildCity(layout) {
   for (const sr of sideRoads) {
     if (rngM() > 0.5) continue;
     box(S, -(roadW / 2 + 1.1), 0.26, sr.z + sr.w / 2 + 1.6, 1.0, 0.5, 1.5, 0x5e6e60);
+  }
+
+  /* --- 吊りバナー街灯(商店街のみ・夜は球灯が光る) --- */
+  if (PARAMS.location === 'shotengai') {
+    const BANNER_C = [0xc4574a, 0x3e6a58, 0x4a5a8a];
+    let bi = 0;
+    for (let bz = -L / 2 + 10; bz < L / 2 - 8; bz += 17) {
+      for (const s of [1, -1]) {
+        const oz = bz + (s > 0 ? 0 : 8.5);               // 左右で互い違い(回避判定は実位置で)
+        if (railway && Math.abs(oz - railway.z) < 7) continue;
+        if (sideRoads.some(sr => Math.abs(oz - sr.z) < sr.w / 2 + 1.5)) continue;
+        if (s > 0 && poles.some(p => Math.abs(p.z - oz) < 2.2)) continue;   // 電柱(+x 側)と重ねない
+        const bx = s * (roadW / 2 + 0.95);
+        cyl(S, bx, 2.55, oz, 0.055, 5.1, 0x707880);      // 柱
+        cyl(S, bx, 5.25, oz, 0.16, 0.3, 0xe8e4da);       // 球灯
+        box(S, bx, 4.35, oz, 0.05, 1.45, 0.5, BANNER_C[bi++ % 3]);   // バナー旗
+        box(S, bx, 5.06, oz, 0.06, 0.05, 0.56, 0x707880);            // 旗バー
+        decal(D, bx - s * 0.2, 0.042, oz, 3.6, 0xffe4b0);
+        GLOW.pos.push(bx, 5.25, oz);
+        GLOW.col.push(1, 0.9, 0.68);
+      }
+    }
   }
 
   /* --- 電柱+電線+防犯灯 --- */
@@ -1395,6 +1458,7 @@ function buildPlot(plot, layout, S, G, W, SIGN) {
     return;
   }
 
+  if (plot.kind === 'shop') { buildShop(plot, rng, S, G, W, SIGN); return; }   // 商店は塀・庭木なし
   if (plot.kind === 'apt') buildApt(plot, rng, S, G, W, SIGN);
   else buildHouse(plot, rng, S, G, W);
 
@@ -1453,12 +1517,12 @@ function buildPlot(plot, layout, S, G, W, SIGN) {
 function frontWindow(S, G, W, fx, cy, cz, w, h, nx, rng) {
   box(S, fx + nx * 0.02, cy, cz, 0.12, h + 0.14, w + 0.14, PAL.sash);
   box(G, fx + nx * 0.085, cy, cz, 0.02, h, w, PAL.glassDay);   // サッシ前面より僅かに前
-  W.push({ gi: G.length - 1, litAt: 16.6 + rng() * 4.6 });
+  W.push({ gi: G.length - 1, kind: 'win', litAt: 16.6 + rng() * 4.6 });
 }
 function sideWindow(S, G, W, cx, cy, fz, w, h, nz, rng) {
   box(S, cx, cy, fz + nz * 0.02, w + 0.14, h + 0.14, 0.12, PAL.sash);
   box(G, cx, cy, fz + nz * 0.085, w, h, 0.02, PAL.glassDay);
-  W.push({ gi: G.length - 1, litAt: 16.6 + rng() * 4.6 });
+  W.push({ gi: G.length - 1, kind: 'win', litAt: 16.6 + rng() * 4.6 });
 }
 
 /* --- 戸建て --- */
@@ -1586,6 +1650,99 @@ function shade(hex, k) {
   return (r << 16) | (g2 << 8) | b;
 }
 
+/* --- 粘土自転車(商店街の店前) --- */
+function clayBike(S, cx, cz, ry) {
+  const c = Math.cos(ry), s2 = Math.sin(ry);
+  const px = (dx, dz) => [cx + c * dx + s2 * dz, cz - s2 * dx + c * dz];
+  for (const dz of [-0.52, 0.52]) {
+    const [wx, wz] = px(0, dz);
+    cylX(S, wx, 0.3, wz, 0.3, 0.035, 0x2e3034, ry);   // 車軸=進行に直交(横向き)
+  }
+  box(S, cx, 0.55, cz, 0.05, 0.05, 1.0, 0x4a5058, ry);        // トップチューブ
+  const [sx1, sz1] = px(0, -0.3);
+  box(S, sx1, 0.78, sz1, 0.24, 0.05, 0.1, 0x2e3034, ry);      // サドル
+  cyl(S, sx1, 0.66, sz1, 0.02, 0.24, 0x4a5058);
+  const [hx1, hz1] = px(0, 0.42);
+  box(S, hx1, 0.82, hz1, 0.36, 0.035, 0.035, 0x4a5058, ry);   // ハンドル
+  cyl(S, hx1, 0.68, hz1, 0.02, 0.3, 0x4a5058);
+  const [kx1, kz1] = px(0, 0.62);
+  box(S, kx1, 0.72, kz1, 0.26, 0.18, 0.24, 0x8a8e92, ry);     // カゴ
+}
+
+/* --- 商店(1F=店front / 2F+=住居。setback 無視で道路に接する) --- */
+const SHOP_KEY_COUNT = 8;
+function buildShop(plot, rng, S, G, W, SIGN) {
+  const { side, z0, z1, xNear } = plot;
+  const w = z1 - z0;
+  const bw = w - rr(rng, 0.25, 0.7);
+  const bd = rr(rng, 7, 10);
+  const floors = pick(rng, [2, 2, 2, 3]);
+  const fh = 2.9;
+  const H = floors * fh + 0.15;
+  const cx = side * (xNear + bd / 2);
+  const cz = (z0 + z1) / 2;
+  const wall = pick(rng, [0xe8e2d6, 0xdcd6cc, 0xd8d0c0, 0xcfc8bc, 0xc9beb0, 0xb8ada2]);
+  const frontX = side * xNear;
+  const out = -side;
+
+  box(S, cx, H / 2, cz, bd, H, bw, wall);
+  box(S, cx, H + 0.22, cz, bd + 0.12, 0.44, bw + 0.12, shade(wall, 0.92));   // パラペット
+
+  const sfW = bw - 0.5, sfH = 2.45;
+  const isShut = rng() < PARAMS.shutterRatio;
+  if (isShut) {
+    // シャッター(横縞スラット)
+    const nSlat = 7;
+    for (let i = 0; i < nSlat; i++) {
+      box(S, frontX + out * 0.05, 0.14 + (sfH / nSlat) * (i + 0.5), cz,
+          0.06, sfH / nSlat - 0.025, sfW, i % 2 ? 0xb4b4b0 : 0xacaca8);
+    }
+    box(S, frontX + out * 0.08, sfH + 0.36, cz, 0.14, 0.4, sfW + 0.2, 0x8e8e8a);  // シャッターボックス
+  } else {
+    // 開店: 大ガラス(店明かり)+庇テント+置き看板+自転車
+    box(S, frontX + out * 0.03, 0.14 + sfH / 2, cz, 0.08, sfH + 0.12, sfW + 0.18, 0x8a857c);
+    box(G, frontX + out * 0.085, 0.14 + sfH / 2, cz, 0.045, sfH - 0.15, sfW - 0.12, PAL.glassDay);
+    W.push({ gi: G.length - 1, kind: 'shop' });
+    const awnC = pick(rng, [0x8a4a3e, 0x3e5a4a, 0x3e4a6a, 0xb0895a, 0x71424f, 0x4a5e6a]);
+    box(S, frontX + out * 0.6, sfH + 0.5, cz, 1.2, 0.07, sfW + 0.35, awnC);       // 庇テント
+    box(S, frontX + out * 1.12, sfH + 0.33, cz, 0.06, 0.3, sfW + 0.35, shade(awnC, 0.85)); // 前垂れ
+    if (PARAMS.signs && rng() < 0.6) {
+      const bz = cz + rr(rng, -bw * 0.28, bw * 0.28);
+      const key = rng() < 0.5 ? 'aboard0' : 'aboard1';
+      box(S, frontX + out * 0.62, 0.42, bz, 0.05, 0.8, 0.5, 0xe8e6de, 0.25 * side);   // 店先(路肩内)
+      signPlane(SIGN, key, frontX + out * (0.62 + 0.035), 0.44, bz, 0.46, 0.68,
+                (side > 0 ? -Math.PI / 2 : Math.PI / 2) + 0.25 * side);
+    }
+    if (rng() < 0.45) clayBike(S, frontX + out * 0.58, z0 + rr(rng, 0.6, 1.2), rr(rng, -0.3, 0.3));
+  }
+
+  // 袖看板(内照: G 発光面+L2 文字。夜に光る)
+  if (PARAMS.signs && rng() < 0.85) {
+    const sy = 0.3 + H * 0.58, sh = 1.55;
+    const sz2 = cz + (rng() < 0.5 ? -1 : 1) * bw * 0.32;
+    box(S, frontX + out * 0.38, sy, sz2, 0.72, sh + 0.12, 0.18, 0x8a857c);
+    box(G, frontX + out * 0.38, sy, sz2, 0.64, sh, 0.12, 0xf2ecd8);
+    W.push({ gi: G.length - 1, kind: 'shop' });
+    const key = 'shop' + (plot.sub % SHOP_KEY_COUNT);
+    signPlane(SIGN, key, frontX + out * 0.38, sy, sz2 + 0.092, 0.56, sh * 0.94, 0);
+    signPlane(SIGN, key, frontX + out * 0.38, sy, sz2 - 0.092, 0.56, sh * 0.94, Math.PI);
+  }
+
+  // 2F+ の住居窓
+  for (let f = 2; f <= floors; f++) {
+    const cy = 0.15 + (f - 1) * fh + 1.42;
+    const nWin = bw > 5.2 ? 2 : 1;
+    for (let i = 0; i < nWin; i++) {
+      const wz = cz + (nWin === 1 ? rr(rng, -0.5, 0.5) : (i - 0.5) * bw * 0.44);
+      frontWindow(S, G, W, frontX, cy, wz, 1.15, 1.0, out, rng);
+    }
+  }
+  // 室外機(2F 壁)
+  if (rng() < 0.6) box(S, frontX + out * 0.25, fh + 1.0, cz + bw * 0.38, 0.3, 0.55, 0.78, 0xe0e0dc);
+
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall, isShop: true };
+}
+
 /* --- アパート(3F・陸屋根・バルコニー連続) --- */
 function buildApt(plot, rng, S, G, W, SIGN) {
   const { side, z0, z1, xNear, depth } = plot;
@@ -1666,8 +1823,8 @@ function regenerate() {
 }
 
 /* URL に「このカット」を保存(seed+時刻+カメラ+モード+コマ枠+街並みパラメータの差分) */
-const GEN_KEYS = ['roadType', 'sideRoadEvery', 'setback', 'houseGap', 'garageRatio', 'aptRatio',
-                  'wires', 'signs', 'crossing', 'mountains'];
+const GEN_KEYS = ['location', 'shutterRatio', 'roadType', 'sideRoadEvery', 'setback', 'houseGap',
+                  'garageRatio', 'aptRatio', 'wires', 'signs', 'crossing', 'mountains'];
 const GEN_DEFAULTS = Object.fromEntries(GEN_KEYS.map(k => [k, PARAMS[k]]));
 const AR_OK = ['free', '4:3', '16:9', '2:1', '3:4'];
 
@@ -1702,6 +1859,7 @@ function parseHash() {
     if (typeof d === 'boolean') PARAMS[k] = v === 'true';
     else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
+    else if (k === 'location' && (v === 'residential' || v === 'shotengai')) PARAMS[k] = v;
   }
   const cs = q.get('cam');
   if (cs) {
@@ -1758,6 +1916,8 @@ const GLASS_LIT = [new THREE.Color(0xffca70).multiplyScalar(1.5),
                    new THREE.Color(0xf2e8c8).multiplyScalar(1.4)];
 const VEND_DAY = new THREE.Color(0xd8e4ea);
 const VEND_LIT = new THREE.Color(0xcfefff).multiplyScalar(1.6);
+const SHOP_DAY = new THREE.Color(0x46525c);
+const SHOP_LIT = new THREE.Color(0xffe6b0).multiplyScalar(1.12);  // 店明かり(暖白。大面積なので控えめ)
 
 function updateWindowLights(fx) {
   if (!city?.glassMesh) return;
@@ -1766,8 +1926,10 @@ function updateWindowLights(fx) {
   const nightish = fx > 0.12;
   for (const w of city.windows) {
     let c;
-    if (w.litAt === 0) {                    // 自販機パネル
+    if (w.kind === 'vend') {                // 自販機パネル(夜常時点灯)
       c = nightish ? VEND_LIT : VEND_DAY;
+    } else if (w.kind === 'shop') {         // 店明かり・袖看板(夜常時点灯・暖色)
+      c = nightish ? SHOP_LIT : SHOP_DAY;
     } else if (!nightish) {
       c = GLASS_DAY;
     } else {
@@ -1940,6 +2102,8 @@ const hint = document.getElementById('hint');
 
 const SCHEMA = [
   { sec: '街並み(再生成)', open: true, items: [
+    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街' }, regen: true },
+    { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
     { k: 'roadType', label: '道路タイプ', type: 'select', opts: { local: '生活道路 4.5m', arterial: '幹線 13m' }, regen: true },
     { k: 'sideRoadEvery', label: '側道間隔', type: 'range', min: 35, max: 120, step: 5, unit: 'm', regen: true },
     { k: 'setback', label: '道路際余白', type: 'range', min: 0, max: 3, step: 0.1, unit: 'm', regen: true },
@@ -2209,7 +2373,8 @@ function buildModebar() {
 function updateHudStatic() {
   const l = city?.layout;
   if (!l) return;
-  hudStat.textContent = `[${l.isArt ? '幹線' : '住宅街'}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
+  const locName = PARAMS.location === 'shotengai' ? '商店街' : l.isArt ? '幹線' : '住宅街';
+  hudStat.textContent = `[${locName}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
 }
 let fpsFrames = 0, fpsTime = 0, fpsNow = 0;
 function updateHud(dt) {
