@@ -120,6 +120,7 @@ const PARAMS = {
   seed: 20260710,
   location: 'residential',  // residential=住宅街 / shotengai=商店街
   shutterRatio: 0.25,       // 商店街のシャッター店比率(1=シャッター街)
+  season: 'none',           // none / sakura(桜) / autumn(紅葉) / snow(雪)
   roadType: 'local',      // local=4.5m / arterial=13m
   sideRoadEvery: 55,      // 側道間隔(m)
   setback: 1.2,           // 道路際余白(m)
@@ -476,6 +477,55 @@ const rainFx = (() => {
   mesh.visible = false;
   return { mesh, geo, pos, seeds, N, R, H, t: 0 };
 })();
+
+/* --- 季節パーティクル(花びら/落ち葉/粉雪。L1=線画対象外) --- */
+const SEASON_FX = {
+  sakura: { color: 0xf8cad8, size: 0.13, fall: 0.55, sway: 1.5, opacity: 0.9 },
+  autumn: { color: 0xcc7a36, size: 0.15, fall: 0.8,  sway: 1.1, opacity: 0.85 },
+  snow:   { color: 0xffffff, size: 0.1,  fall: 0.75, sway: 0.55, opacity: 0.9 },
+};
+const petalFx = (() => {
+  const N = 900, R = 24, H = 13;
+  const pos = new Float32Array(N * 3);
+  const seeds = new Float32Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    seeds[i * 4]     = Math.random() * R * 2 - R;
+    seeds[i * 4 + 1] = Math.random() * H;
+    seeds[i * 4 + 2] = Math.random() * R * 2 - R;
+    seeds[i * 4 + 3] = Math.random() * Math.PI * 2;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ map: gradTex, size: 0.12, sizeAttenuation: true,
+    transparent: true, opacity: 0, depthWrite: false, color: 0xffffff });
+  const mesh = new THREE.Points(geo, mat);
+  mesh.layers.set(1);
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return { mesh, geo, pos, seeds, N, R, H, t: 0 };
+})();
+
+function updatePetals(dt) {
+  const fx = SEASON_FX[PARAMS.season];
+  petalFx.mesh.visible = !!fx;
+  if (!fx) return;
+  petalFx.t += dt;
+  const m = petalFx.mesh.material;
+  m.color.set(fx.color);
+  m.size = fx.size;
+  m.opacity = fx.opacity;
+  const { pos, seeds, N, H } = petalFx;
+  const t = petalFx.t;
+  for (let i = 0; i < N; i++) {
+    const ph = seeds[i * 4 + 3];
+    let y = (seeds[i * 4 + 1] - t * fx.fall) % H;
+    if (y < 0) y += H;
+    pos[i * 3]     = cam.pos.x + seeds[i * 4] + Math.sin(t * 0.7 + ph) * fx.sway;
+    pos[i * 3 + 1] = y;
+    pos[i * 3 + 2] = cam.pos.z + seeds[i * 4 + 2] + Math.cos(t * 0.5 + ph * 1.3) * fx.sway * 0.6;
+  }
+  petalFx.geo.attributes.position.needsUpdate = true;
+}
 
 function updateRain(dt) {
   const r = PARAMS.rain;
@@ -991,23 +1041,29 @@ function buildCity(layout) {
   for (const sr of sideRoads) bands.push({ z0: sr.z - sr.w / 2, z1: sr.z + sr.w / 2 });
   if (railway) bands.push({ z0: railway.z - 3.5, z1: railway.z + 3.5 });
 
-  /* --- 地面ベース --- */
-  box(S, 0, -0.06, 0, 420, 0.1, 420, PAL.soil);
+  /* --- 地面ベース(雪の日は積雪色に差し替え) --- */
+  const SNOW = PARAMS.season === 'snow';
+  const cSoil = SNOW ? 0xe6e8ea : PAL.soil;
+  const cAsphalt = SNOW ? 0xc4c6c9 : PAL.asphalt;   // 車道は除雪跡のグレー残し
+  const cGutter = SNOW ? 0xd4d6d8 : PAL.gutter;
+  const cCurb = SNOW ? 0xeaecee : PAL.curb;
+  const cSidewalk = SNOW ? 0xe5e7ea : PAL.sidewalk;
+  box(S, 0, -0.06, 0, 420, 0.1, 420, cSoil);
 
   /* --- メイン道路 --- */
-  box(S, 0, 0.005, 0, roadW, 0.03, L + 30, PAL.asphalt);
+  box(S, 0, 0.005, 0, roadW, 0.03, L + 30, cAsphalt);
   for (const s of [1, -1]) {
-    box(S, s * (roadW / 2 + 0.25), 0.006, 0, 0.5, 0.028, L + 30, PAL.gutter);
+    box(S, s * (roadW / 2 + 0.25), 0.006, 0, 0.5, 0.028, L + 30, cGutter);
   }
   for (const s of [1, -1]) {
     for (const [a, b] of segmentsAvoiding(-L / 2 - 10, L / 2 + 10, bands, 0.4)) {
-      box(S, s * (roadW / 2 + 0.575), 0.075, (a + b) / 2, 0.15, 0.15, b - a, PAL.curb);
+      box(S, s * (roadW / 2 + 0.575), 0.075, (a + b) / 2, 0.15, 0.15, b - a, cCurb);
     }
   }
   if (isArt) {
     for (const s of [1, -1]) {
       for (const [a, b] of segmentsAvoiding(-L / 2 - 10, L / 2 + 10, bands, 0.4)) {
-        box(S, s * (roadW / 2 + 0.65 + sidewalkW / 2), 0.04, (a + b) / 2, sidewalkW, 0.08, b - a, PAL.sidewalk);
+        box(S, s * (roadW / 2 + 0.65 + sidewalkW / 2), 0.04, (a + b) / 2, sidewalkW, 0.08, b - a, cSidewalk);
       }
     }
     for (const [a, b] of segmentsAvoiding(-L / 2, L / 2, bands, 1)) {
@@ -1019,9 +1075,9 @@ function buildCity(layout) {
 
   /* --- 側道 --- */
   for (const sr of sideRoads) {
-    box(S, 0, 0.004, sr.z, 90, 0.026, sr.w, PAL.asphalt);
+    box(S, 0, 0.004, sr.z, 90, 0.026, sr.w, cAsphalt);
     for (const s of [1, -1]) {
-      box(S, 0, 0.005, sr.z + s * (sr.w / 2 + 0.2), 90, 0.024, 0.4, PAL.gutter);
+      box(S, 0, 0.005, sr.z + s * (sr.w / 2 + 0.2), 90, 0.024, 0.4, cGutter);
     }
   }
 
@@ -1094,6 +1150,27 @@ function buildCity(layout) {
   for (const sr of sideRoads) {
     if (rngM() > 0.5) continue;
     box(S, -(roadW / 2 + 1.1), 0.26, sr.z + sr.w / 2 + 1.6, 1.0, 0.5, 1.5, 0x5e6e60);
+  }
+
+  /* --- 街路樹(桜・紅葉の季節のみ。独立 rng で他要素を動かさない) --- */
+  if (PARAMS.season === 'sakura' || PARAMS.season === 'autumn') {
+    const rngT = mulberry32(hash2(seed, 333));
+    const leafC = seasonLeaf();
+    const trunkC = PARAMS.season === 'sakura' ? 0x6e5648 : 0x6a5a48;
+    for (let tz = -L / 2 + 12; tz < L / 2 - 8; tz += 21) {
+      for (const s of [1, -1]) {
+        const oz = tz + (s > 0 ? 10 : 0);
+        if (railway && Math.abs(oz - railway.z) < 7) continue;
+        if (sideRoads.some(sr => Math.abs(oz - sr.z) < sr.w / 2 + 2.5)) continue;
+        if (s > 0 && poles.some(p => Math.abs(p.z - oz) < 2.4)) continue;
+        const tx = s * (roadW / 2 + 1.05);
+        const th2 = rr(rngT, 2.4, 3.2);
+        cyl(S, tx, th2 * 0.5, oz, 0.11, th2, trunkC);
+        blob(S, tx, th2 + 0.9, oz, rr(rngT, 2.2, 2.9), pick(rngT, leafC));
+        blob(S, tx + 0.7, th2 + 0.4, oz + 0.5, rr(rngT, 1.4, 1.9), pick(rngT, leafC));
+        blob(S, tx - 0.6, th2 + 0.5, oz - 0.4, rr(rngT, 1.3, 1.8), pick(rngT, leafC));
+      }
+    }
   }
 
   /* --- 吊りバナー街灯(商店街のみ・夜は球灯が光る) --- */
@@ -1198,8 +1275,10 @@ function buildCity(layout) {
   const mountainMeshes = [];
   if (PARAMS.mountains) {
     const rngMt = mulberry32(hash2(seed, 999));
-    // 頂点色は無彩の係数(遠=空に近い/近=わずかに濃い)。実際の色は applyLight が空色を乗算
-    for (const [bz, hMax, hex] of [[-315, 46, 0xf2f2f2], [-285, 30, 0xdedede]]) {
+    // 頂点色は無彩の係数(遠=空に近い/近=わずかに濃い)。実際の色は applyLight が空色を乗算。雪は白く
+    const mtCols = SNOW ? [[-315, 46, 0xffffff], [-285, 30, 0xf6f6f6]]
+                        : [[-315, 46, 0xf2f2f2], [-285, 30, 0xdedede]];
+    for (const [bz, hMax, hex] of mtCols) {
       const geo = mountainGeo(rngMt, hMax, hex);
       geo.translate(0, 0, bz);
       const m = new THREE.Mesh(geo, matMountain);
@@ -1436,7 +1515,8 @@ function buildPlot(plot, layout, S, G, W, SIGN) {
   const cz = (z0 + z1) / 2;
 
   // 敷地面
-  box(S, cx, 0.012, cz, depth, 0.05, w, plot.kind === 'lot' ? PAL.gravel : PAL.concrete);
+  const cPlot = PARAMS.season === 'snow' ? 0xe3e6e9 : plot.kind === 'lot' ? PAL.gravel : PAL.concrete;
+  box(S, cx, 0.012, cz, depth, 0.05, w, cPlot);
 
   if (plot.kind === 'lot') {  // 月極駐車場: フェンス+看板+駐車車両
     for (const zz of [z0 + 0.1, z1 - 0.1]) {
@@ -1508,8 +1588,8 @@ function buildPlot(plot, layout, S, G, W, SIGN) {
     const tz = rr(rng, z0 + 1, z1 - 1);
     const th = rr(rng, 1.6, 3.2);
     cyl(S, tx, th * 0.35, tz, 0.07, th * 0.7, PAL.trunk);
-    blob(S, tx, th * 0.75, tz, th * 0.75, pick(rng, PAL.leaf));
-    blob(S, tx + 0.3, th * 0.95, tz + 0.2, th * 0.5, pick(rng, PAL.leaf));
+    blob(S, tx, th * 0.75, tz, th * 0.75, pick(rng, seasonLeaf()));
+    blob(S, tx + 0.3, th * 0.95, tz + 0.2, th * 0.5, pick(rng, seasonLeaf()));
   }
 }
 
@@ -1538,7 +1618,7 @@ function buildHouse(plot, rng, S, G, W) {
   const cx = side * (xNear + setback + bd / 2);
   const cz = (z0 + z1) / 2 + rr(rng, -0.4, 0.4);
   const wall = pick(rng, PAL.walls);
-  const roof = pick(rng, PAL.roofs);
+  const roof = pick(rng, PARAMS.season === 'snow' ? SNOW_ROOFS : PAL.roofs);  // 雪化粧
   const frontX = side * (xNear + setback);   // 前面の壁位置(符号付き)
 
   // 基礎+本体
@@ -1587,7 +1667,7 @@ function buildHouse(plot, rng, S, G, W) {
     for (let i = 0; i < 1 + Math.floor(rng() * 2.4); i++) {
       const pz2 = doorZ + 0.95 + i * 0.32;
       cyl(S, frontX + out * 0.25, 0.11, pz2, 0.12, 0.22, 0x9a6a4a);
-      blob(S, frontX + out * 0.25, 0.32, pz2, 0.3, pick(rng, PAL.leaf));
+      blob(S, frontX + out * 0.25, 0.32, pz2, 0.3, pick(rng, seasonLeaf()));
     }
   }
 
@@ -1644,6 +1724,17 @@ function buildHouse(plot, rng, S, G, W) {
 
   plot.house = { cx, cz, bd, bw, H, floors, fh, wall, roof, doorZ, frontX: xNear + setback };
 }
+/* 季節ごとの葉色(pick の消費数は不変=季節を変えても他要素は動かない) */
+const SNOW_ROOFS = [0xe4e7ea, 0xdde1e5, 0xe8ebee, 0xe1e4e8];
+function seasonLeaf() {
+  switch (PARAMS.season) {
+    case 'sakura': return [0xf0bfce, 0xe9aec2];
+    case 'autumn': return [0xd08a3c, 0xbf5f2e, 0xc9a03e];
+    case 'snow':   return [0x9fb0a2, 0xc6d0ca];
+    default:       return PAL.leaf;
+  }
+}
+
 /* 色を暗くする(頂点色バリエーション用) */
 function shade(hex, k) {
   const r = Math.round(((hex >> 16) & 255) * k), g2 = Math.round(((hex >> 8) & 255) * k), b = Math.round((hex & 255) * k);
@@ -1823,8 +1914,8 @@ function regenerate() {
 }
 
 /* URL に「このカット」を保存(seed+時刻+カメラ+モード+コマ枠+街並みパラメータの差分) */
-const GEN_KEYS = ['location', 'shutterRatio', 'roadType', 'sideRoadEvery', 'setback', 'houseGap',
-                  'garageRatio', 'aptRatio', 'wires', 'signs', 'crossing', 'mountains'];
+const GEN_KEYS = ['location', 'shutterRatio', 'season', 'roadType', 'sideRoadEvery', 'setback',
+                  'houseGap', 'garageRatio', 'aptRatio', 'wires', 'signs', 'crossing', 'mountains'];
 const GEN_DEFAULTS = Object.fromEntries(GEN_KEYS.map(k => [k, PARAMS[k]]));
 const AR_OK = ['free', '4:3', '16:9', '2:1', '3:4'];
 
@@ -1860,6 +1951,7 @@ function parseHash() {
     else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
     else if (k === 'location' && (v === 'residential' || v === 'shotengai')) PARAMS[k] = v;
+    else if (k === 'season' && ['none', 'sakura', 'autumn', 'snow'].includes(v)) PARAMS[k] = v;
   }
   const cs = q.get('cam');
   if (cs) {
@@ -1973,6 +2065,14 @@ function applyLight() {
     lerpColorStops(TOP_STOPS, h, skyMat.uniforms.uTop.value);
     skyMat.uniforms.uBot.value.copy(_skyColor);
   }
+  // 雪の日: 空を白灰に・雪面反射で明るく(彩度を落とした静けさ)
+  if (PARAMS.season === 'snow') {
+    _skyColor.lerp(_c2.setHex(h >= 5.7 && h <= 18.8 ? 0xc9ced4 : 0x1c222c), 0.45);
+    skyMat.uniforms.uTop.value.lerp(_c2.setHex(h >= 5.7 && h <= 18.8 ? 0xacb4bd : 0x141a24), 0.45);
+    skyMat.uniforms.uBot.value.copy(_skyColor);
+    hemi.intensity *= 1.15;
+  }
+
   // 雨: 太陽を潰し空をグレーへ寄せる(overcast とは独立に効く)
   const rain = PARAMS.rain;
   if (rain > 0) {
@@ -2104,6 +2204,7 @@ const SCHEMA = [
   { sec: '街並み(再生成)', open: true, items: [
     { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街' }, regen: true },
     { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
+    { k: 'season', label: '季節', type: 'select', opts: { none: '通常', sakura: '桜', autumn: '紅葉', snow: '雪' }, regen: true },
     { k: 'roadType', label: '道路タイプ', type: 'select', opts: { local: '生活道路 4.5m', arterial: '幹線 13m' }, regen: true },
     { k: 'sideRoadEvery', label: '側道間隔', type: 'range', min: 35, max: 120, step: 5, unit: 'm', regen: true },
     { k: 'setback', label: '道路際余白', type: 'range', min: 0, max: 3, step: 0.1, unit: 'm', regen: true },
@@ -2574,6 +2675,7 @@ function tick(now) {
   updateShadowBox();
   updateCrossing(dt);
   updateRain(dt);
+  updatePetals(dt);
   const activeCam = topView ? orthoCam : camera;
   renderFrame(PARAMS.mode, activeCam);
   updateHud(dt);
@@ -2587,6 +2689,7 @@ parseHash();
 scene.add(skyDome);
 scene.add(mannequin);
 scene.add(rainFx.mesh);
+scene.add(petalFx.mesh);
 scene.add(camera);        // カメラの子(窓越しフレーム)を描画可能に
 camera.add(winFrame);
 buildPanel();
