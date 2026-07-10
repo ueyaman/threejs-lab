@@ -273,6 +273,9 @@ const matMountain = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false
 
 /* 海面(空色を拾う unlit。fog で遠くが空へ溶け、L0 なので水平線が線画に出る) */
 const matSea = new THREE.MeshBasicMaterial({ color: 0x86a8c0 });
+
+/* 水田の田面(季節連動: 春=水鏡(空色) / 夏=緑 / 秋=金色 / 雪=雪原) */
+const matPaddy = new THREE.MeshStandardMaterial({ color: 0x6f9a4e, roughness: 0.85, metalness: 0 });
 function mountainGeo(rng, hMax, hex) {
   const N = 26, W2 = 640;
   const ys = [];
@@ -384,13 +387,14 @@ function genLayout(P) {
   let plotIndex = 0;
   for (const side of (isSeaside ? [-1] : [1, -1])) {
     for (const row of [0, 1]) {
-      const xNear = edge0 + (row === 0 ? 0 : 17.5);
-      const depth = row === 0 ? rr(rng, 13, 16) : 12;
       const isShotengai = P.location === 'shotengai';
+      const isRural = P.location === 'rural';
+      const xNear = edge0 + (row === 0 ? 0 : 17.5);
+      const depth = row === 0 ? rr(rng, 13, 16) * (isRural ? 1.35 : 1) : (isRural ? 17 : 12);
       let pz = -L / 2 + 1.5;
       while (pz < L / 2 - 9) {
-        // 商店街の表通りは間口が狭い(rr は 1 回消費=residential の乱数列を変えない)
-        const w = (isShotengai && row === 0) ? rr(rng, 5, 8.5) : rr(rng, 8, 12.5);
+        // 商店街=狭い間口 / 田舎=広い田区画(rr は 1 回消費=residential の乱数列を変えない)
+        const w = (isShotengai && row === 0) ? rr(rng, 5, 8.5) : isRural ? rr(rng, 12, 19) : rr(rng, 8, 12.5);
         const hit = bands.find(b => pz < b.z1 && pz + w > b.z0);
         if (hit) { pz = hit.z1 + 0.4; continue; }
         if (pz + w > L / 2 - 1) break;
@@ -403,10 +407,14 @@ function genLayout(P) {
             if (roll < P.aptRatio * 0.5) kind = 'apt';
             else if (roll < P.aptRatio * 0.5 + 0.03) kind = 'lot';
             else kind = 'shop';
+          } else if (isRural) {
+            kind = roll < 0.18 ? 'house' : 'paddy';
           } else {
             if (roll < P.aptRatio) kind = 'apt';
             else if (roll < P.aptRatio + 0.05) kind = 'lot';
           }
+        } else if (isRural) {
+          kind = r2() < 0.14 ? 'house' : 'paddy';   // 2 列目も田主体(r2 は区画個別なので他に波及しない)
         }
         plots.push({ side, row, z0: pz, z1: pz + w, xNear, depth, sub, kind, groundY: 0 });
         pz += w + rr(rng, 0.1, 0.7);
@@ -1042,6 +1050,7 @@ function buildCity(layout) {
   const D = [];       // 夜の明かりだまりデカール(L1)
   const GLOW = { pos: [], col: [] };  // グロースプライト(L1)
   const SIGN = [];    // 看板文字 Plane(L2)
+  const PADDY = [];   // 水田の田面(matPaddy 専用・季節連動色)
   const { roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, seed } = layout;
   const bands = [];
   for (const sr of sideRoads) bands.push({ z0: sr.z - sr.w / 2, z1: sr.z + sr.w / 2 });
@@ -1113,7 +1122,7 @@ function buildCity(layout) {
 
   /* --- 区画 --- */
   for (const plot of plots) {
-    buildPlot(plot, layout, S, G, W, SIGN);
+    buildPlot(plot, layout, S, G, W, SIGN, PADDY);
   }
 
   /* --- 路面標示(停止線・横断歩道・ダイヤ)+「止まれ」 --- */
@@ -1167,6 +1176,36 @@ function buildCity(layout) {
     box(S, -(roadW / 2 + 1.1), 0.26, sr.z + sr.w / 2 + 1.6, 1.0, 0.5, 1.5, 0x5e6e60);
   }
 
+  /* --- 火の見櫓(田舎に 1 基。帯を避けられなければ建てない) --- */
+  let towerOk = false, towerZ = 0;
+  if (PARAMS.location === 'rural') {
+    const rngR = mulberry32(hash2(seed, 2222));
+    for (let tryI = 0; tryI < 8 && !towerOk; tryI++) {
+      towerZ = -L / 2 + rr(rngR, 40, 165);
+      towerOk = !sideRoads.some(sr => Math.abs(towerZ - sr.z) < 6) && !(railway && Math.abs(towerZ - railway.z) < 8);
+    }
+  }
+  if (towerOk) {
+    const fz = towerZ;
+    const fx = -(roadW / 2 + 2.6);
+    for (const dx of [-0.55, 0.55]) for (const dz of [-0.55, 0.55]) {
+      box(S, fx + dx, 3.4, fz + dz, 0.1, 6.8, 0.1, 0xc0483a);       // 4 隅柱
+    }
+    for (const hy of [1.8, 3.8, 5.8]) {                              // 梁 3 段
+      box(S, fx, hy, fz - 0.55, 1.25, 0.08, 0.08, 0xc0483a);
+      box(S, fx, hy, fz + 0.55, 1.25, 0.08, 0.08, 0xc0483a);
+      box(S, fx - 0.55, hy, fz, 0.08, 0.08, 1.25, 0xc0483a);
+      box(S, fx + 0.55, hy, fz, 0.08, 0.08, 1.25, 0xc0483a);
+    }
+    box(S, fx, 6.9, fz, 1.55, 0.09, 1.55, 0xb8b4ac);                 // 見張り床
+    for (const s2 of [1, -1]) {
+      box(S, fx + s2 * 0.72, 7.3, fz, 0.05, 0.7, 1.5, 0x8e8a82);     // 手すり
+      box(S, fx, 7.3, fz + s2 * 0.72, 1.5, 0.7, 0.05, 0x8e8a82);
+    }
+    hipRoof(S, fx, 7.85, fz, 1.9, 1.9, 0.6, 0x84403a);               // 小屋根
+    cyl(S, fx, 7.35, fz, 0.15, 0.34, 0x8a7752);                      // 半鐘
+  }
+
   /* --- 街路樹(桜・紅葉の季節のみ。独立 rng で他要素を動かさない) --- */
   if (PARAMS.season === 'sakura' || PARAMS.season === 'autumn') {
     const rngT = mulberry32(hash2(seed, 333));
@@ -1215,7 +1254,8 @@ function buildCity(layout) {
     let adI = 0;
     for (const p of poles) {
       const dir = p.dir ?? -1;   // 道路向き(海辺では電柱が陸側に建つ)
-      cyl(S, p.x, 5.0, p.z, 0.13, 10.0, 0xb4b2ac);                 // 柱
+      const poleC = PARAMS.location === 'rural' ? 0x8a7460 : 0xb4b2ac;   // 田舎は木製電柱
+      cyl(S, p.x, 5.0, p.z, 0.13, 10.0, poleC);                    // 柱
       // 巻き看板(たまに)
       if (PARAMS.signs && rngM() < 0.3) {
         const key = adI++ % 2 ? 'pole1' : 'pole2';
@@ -1273,20 +1313,25 @@ function buildCity(layout) {
     }
   }
 
-  /* --- 遠景ビル群(海辺は陸側に折る。rngD の消費数は不変) --- */
+  /* --- 遠景ビル群(海辺は陸側に折る/田舎は 2 棟だけ。rngD の消費数は不変) --- */
+  const isRural = PARAMS.location === 'rural';
   const rngD = mulberry32(hash2(seed, 777));
   for (let i = 0; i < 14; i++) {
     let bx = rr(rngD, 38, 90) * (rngD() < 0.5 ? 1 : -1);
     if (layout.isSeaside) bx = -Math.abs(bx);
     const bz = rr(rngD, -L / 2 - 40, L / 2 + 40);
     const bw = rr(rngD, 8, 16), bd = rr(rngD, 8, 14), bh = rr(rngD, 9, 26);
-    box(S, bx, bh / 2, bz, bw, bh, bd, pick(rngD, PAL.bldg));
-    box(S, bx, bh + 0.3, bz, bw + 0.4, 0.6, bd + 0.4, 0x9fa3a8);
+    const bcol = pick(rngD, PAL.bldg);   // 全消費を終えてから skip(消費数の不変条件)
+    if (isRural && i >= 2) continue;     // 田舎の遠景は疎
+    box(S, bx, isRural ? bh / 4 : bh / 2, bz, bw, isRural ? bh / 2 : bh, bd, bcol);
+    box(S, bx, (isRural ? bh / 2 : bh) + 0.3, bz, bw + 0.4, 0.6, bd + 0.4, 0x9fa3a8);
   }
   for (let i = 0; i < 4; i++) {
     const bx = layout.isSeaside ? rr(rngD, -32, -6) : rr(rngD, -18, 18);   // 海辺は陸側へ(消費数不変)
     const bh = rr(rngD, 10, 22);
-    box(S, bx, bh / 2, -L / 2 - rr(rngD, 25, 55), rr(rngD, 10, 18), bh, rr(rngD, 8, 14), pick(rngD, PAL.bldg));
+    const bz2 = -L / 2 - rr(rngD, 25, 55), bw2 = rr(rngD, 10, 18), bd2 = rr(rngD, 8, 14), bc = pick(rngD, PAL.bldg);
+    if (isRural) continue;             // 田舎の正面はビルなし(山が主役)
+    box(S, bx, bh / 2, bz2, bw2, bh, bd2, bc);
   }
 
   /* --- 海(seaside: 海面・堤防・テトラポッド・波線・灯台・防風林) --- */
@@ -1345,9 +1390,10 @@ function buildCity(layout) {
   const mountainMeshes = [];
   if (PARAMS.mountains) {
     const rngMt = mulberry32(hash2(seed, 999));
-    // 頂点色は無彩の係数(遠=空に近い/近=わずかに濃い)。実際の色は applyLight が空色を乗算。雪は白く
-    const mtCols = SNOW ? [[-315, 46, 0xffffff], [-285, 30, 0xf6f6f6]]
-                        : [[-315, 46, 0xf2f2f2], [-285, 30, 0xdedede]];
+    // 頂点色は無彩の係数(遠=空に近い/近=わずかに濃い)。実際の色は applyLight が空色を乗算。雪は白く、田舎は近く大きく
+    const mtPos = isRural ? [[-252, 62], [-226, 44]] : [[-315, 46], [-285, 30]];
+    const mtHex = SNOW ? [0xffffff, 0xf6f6f6] : [0xf2f2f2, 0xdedede];
+    const mtCols = mtPos.map(([bz, hMax], i) => [bz, hMax, mtHex[i]]);
     for (const [bz, hMax, hex] of mtCols) {
       const geo = mountainGeo(rngMt, hMax, hex);
       geo.translate(0, 0, bz);
@@ -1369,6 +1415,15 @@ function buildCity(layout) {
   geos.push(solidGeo);
   for (const m of mountainMeshes) { group.add(m); geos.push(m.geometry); }
   if (seaMesh) { group.add(seaMesh); geos.push(seaMesh.geometry); }
+
+  if (PADDY.length) {
+    const pGeo2 = mergeGeometries(PADDY, false);
+    pGeo2.computeBoundingSphere();
+    const pMesh2 = new THREE.Mesh(pGeo2, matPaddy);
+    pMesh2.receiveShadow = true;
+    group.add(pMesh2);
+    geos.push(pGeo2);
+  }
 
   let glassMesh = null;
   if (G.length) {
@@ -1578,12 +1633,14 @@ function updateCrossing(dt) {
 }
 
 /* --- 1 区画 --- */
-function buildPlot(plot, layout, S, G, W, SIGN) {
+function buildPlot(plot, layout, S, G, W, SIGN, PADDY) {
   const rng = mulberry32(plot.sub);
   const { side, row, z0, z1, xNear, depth } = plot;
   const w = z1 - z0;
   const cx = side * (xNear + depth / 2);
   const cz = (z0 + z1) / 2;
+
+  if (plot.kind === 'paddy') { buildPaddy(plot, rng, S, PADDY); return; }
 
   // 敷地面
   const cPlot = PARAMS.season === 'snow' ? 0xe3e6e9 : plot.kind === 'lot' ? PAL.gravel : PAL.concrete;
@@ -1812,6 +1869,50 @@ function shade(hex, k) {
   return (r << 16) | (g2 << 8) | b;
 }
 
+/* --- 水田(畦の格子が albedo エッジで LINE に乗る) --- */
+function buildPaddy(plot, rng, S, PADDY) {
+  const { side, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const cx = side * (xNear + depth / 2);
+  const cz = (z0 + z1) / 2;
+  const season = PARAMS.season;
+
+  // 田面(matPaddy 専用メッシュ=季節色は applyLight が塗る)
+  box(PADDY, cx, 0.008, cz, depth - 0.5, 0.03, w - 0.5, 0xffffff);
+
+  // 畦(周囲 4 辺+内部 1-2 本の格子)
+  const azeC = season === 'snow' ? 0xdfe3e6 : 0xab9668;
+  const azeH = 0.15, azeW = 0.42;
+  box(S, cx, azeH / 2, z0 + azeW / 2, depth, azeH, azeW, azeC);
+  box(S, cx, azeH / 2, z1 - azeW / 2, depth, azeH, azeW, azeC);
+  box(S, side * (xNear + azeW / 2), azeH / 2, cz, azeW, azeH, w, azeC);
+  box(S, side * (xNear + depth - azeW / 2), azeH / 2, cz, azeW, azeH, w, azeC);
+  if (w > 11) box(S, cx, azeH / 2, z0 + w * rr(rng, 0.4, 0.6), depth, azeH, azeW * 0.8, azeC);
+  if (depth > 13 && rng() < 0.6) box(S, side * (xNear + depth * rr(rng, 0.4, 0.6)), azeH / 2, cz, azeW * 0.8, azeH, w, azeC);
+
+  // 条(夏=緑・秋=金の稲列。春の水鏡・雪原にはなし)
+  if (season === 'none' || season === 'autumn') {
+    const rowC = season === 'autumn' ? 0xbc9a42 : 0x5b8840;
+    for (let rz2 = z0 + 1.3; rz2 < z1 - 1.0; rz2 += 1.45) {
+      box(S, cx, 0.05, rz2, depth - 1.4, 0.06, 0.15, rowC);
+    }
+  }
+
+  // ビニールハウス(たまに。半分埋めた円筒)
+  if (rng() < 0.16 && w > 12) {
+    const hx = side * (xNear + depth * 0.55);
+    const hz = cz + rr(rng, -w * 0.12, w * 0.12);
+    cylX(S, hx, 0.55, hz, 1.9, Math.min(10, w * 0.5), 0xe9edec, Math.PI / 2);
+  }
+
+  // のぼり(道路際にたまに)
+  if (rng() < 0.22 && plot.row === 0) {
+    const nx = side * (xNear + 0.7), nz = cz + rr(rng, -w * 0.3, w * 0.3);
+    cyl(S, nx, 1.5, nz, 0.025, 3.0, 0x8a8478);
+    box(S, nx, 2.05, nz + 0.24, 0.04, 1.4, 0.42, pick(rng, [0xe8e4da, 0xd8524a, 0x4a70b8]));
+  }
+}
+
 /* --- 粘土自転車(商店街の店前) --- */
 function clayBike(S, cx, cz, ry) {
   const c = Math.cos(ry), s2 = Math.sin(ry);
@@ -2022,7 +2123,7 @@ function parseHash() {
     if (typeof d === 'boolean') PARAMS[k] = v === 'true';
     else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
-    else if (k === 'location' && ['residential', 'shotengai', 'seaside'].includes(v)) PARAMS[k] = v;
+    else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural'].includes(v)) PARAMS[k] = v;
     else if (k === 'season' && ['none', 'sakura', 'autumn', 'snow'].includes(v)) PARAMS[k] = v;
   }
   const cs = q.get('cam');
@@ -2159,6 +2260,9 @@ function applyLight() {
   scene.fog.color.copy(_skyColor);
   matMountain.color.copy(_skyColor).multiplyScalar(0.9);   // 空より一段濃いシルエット
   matSea.color.copy(_skyColor).lerp(_c2.setHex(0x4a7690), 0.42);   // 海=空を拾いつつ青味(夕方は茜色に)
+  // 水田の季節色(春だけ水鏡=空を映す)
+  if (PARAMS.season === 'sakura') matPaddy.color.copy(_skyColor).lerp(_c2.setHex(0x7290a0), 0.3);
+  else matPaddy.color.setHex({ none: 0x6f9a4e, autumn: 0xcfae50, snow: 0xe4e7ea }[PARAMS.season] ?? 0x6f9a4e);
   renderer.toneMappingExposure = PARAMS.exposure;
 
   // 夜間 FX(デカール・グロー・窓)
@@ -2275,7 +2379,7 @@ const hint = document.getElementById('hint');
 
 const SCHEMA = [
   { sec: '街並み(再生成)', open: true, items: [
-    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道' }, regen: true },
+    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道' }, regen: true },
     { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
     { k: 'season', label: '季節', type: 'select', opts: { none: '通常', sakura: '桜', autumn: '紅葉', snow: '雪' }, regen: true },
     { k: 'roadType', label: '道路タイプ', type: 'select', opts: { local: '生活道路 4.5m', arterial: '幹線 13m' }, regen: true },
@@ -2547,7 +2651,7 @@ function buildModebar() {
 function updateHudStatic() {
   const l = city?.layout;
   if (!l) return;
-  const locName = PARAMS.location === 'shotengai' ? '商店街' : PARAMS.location === 'seaside' ? '海辺' : l.isArt ? '幹線' : '住宅街';
+  const locName = { shotengai: '商店街', seaside: '海辺', rural: '田舎道' }[PARAMS.location] ?? (l.isArt ? '幹線' : '住宅街');
   hudStat.textContent = `[${locName}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
 }
 let fpsFrames = 0, fpsTime = 0, fpsNow = 0;
