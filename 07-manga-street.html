@@ -1,0 +1,2174 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · Manga Street — Three.js Lab</title>
+<style>
+  :root { --accent:#7cf; --border:#2a2a32; --bg:#0a0a0c; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; }
+  body { background:var(--bg); color:#c8c8d0; overflow:hidden;
+         font-family:"SF Mono","Cascadia Code",Consolas,monospace; font-size:12px; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#000; }
+  canvas { display:block; }
+
+  a#back { position:fixed; top:12px; left:14px; z-index:20; color:#9aa;
+           text-decoration:none; background:#12121aee; border:1px solid var(--border);
+           padding:4px 10px; border-radius:6px; }
+  a#back:hover { color:var(--accent); border-color:var(--accent); }
+
+  #hud { position:fixed; left:14px; bottom:12px; z-index:20; background:#0e0e14cc;
+         border:1px solid var(--border); padding:6px 10px; border-radius:6px;
+         line-height:1.55; pointer-events:none; white-space:pre; color:#aab; }
+  #hud b { color:var(--accent); }
+
+  /* 右上パネル */
+  #panel { position:fixed; top:12px; right:12px; z-index:20; width:262px;
+           max-height:calc(100% - 90px); overflow-y:auto;
+           background:#111118f2; border:1px solid var(--border); border-radius:8px; }
+  #panel::-webkit-scrollbar { width:6px; }
+  #panel::-webkit-scrollbar-thumb { background:#333; border-radius:3px; }
+  #panel details { border-bottom:1px solid var(--border); }
+  #panel details:last-child { border-bottom:none; }
+  #panel summary { cursor:pointer; padding:8px 12px; color:#dde; font-weight:bold;
+                   list-style:none; user-select:none; }
+  #panel summary::before { content:"▸ "; color:var(--accent); }
+  #panel details[open] summary::before { content:"▾ "; }
+  #panel .sec-body { padding:2px 12px 10px; }
+  .ctrl { margin-bottom:8px; }
+  .ctrl label { display:flex; justify-content:space-between; align-items:center;
+                margin-bottom:2px; color:#99a; }
+  .ctrl label .val { color:#dde; }
+  .ctrl input[type=range] { width:100%; accent-color:var(--accent); height:18px; }
+  .ctrl select { width:100%; background:#16161c; color:#ccd; border:1px solid var(--border);
+                 border-radius:4px; padding:3px 6px; font:inherit; }
+  .ctrl.chk { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .ctrl.chk input { accent-color:var(--accent); }
+  .ctrl.chk label { margin:0; color:#99a; cursor:pointer; }
+  .btnrow { display:flex; gap:6px; margin:4px 0 8px; }
+  .btnrow button { flex:1; background:#16161c; color:#ccd; border:1px solid var(--border);
+                   border-radius:5px; padding:5px 4px; font:inherit; cursor:pointer; }
+  .btnrow button:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* 下部モードバー */
+  #modebar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
+             z-index:20; display:flex; gap:6px; align-items:center;
+             background:#111118f2; border:1px solid var(--border); border-radius:8px;
+             padding:6px 8px; }
+  #modebar button { background:#16161c; color:#bbc; border:1px solid var(--border);
+                    border-radius:5px; padding:6px 14px; font:inherit; cursor:pointer; }
+  #modebar button.active { background:rgba(119,204,255,.16); border-color:var(--accent); color:var(--accent); }
+  #modebar button:disabled { opacity:.35; cursor:default; }
+  #modebar .sep { width:1px; height:22px; background:var(--border); margin:0 2px; }
+
+  #hint { position:fixed; bottom:64px; left:50%; transform:translateX(-50%); z-index:19;
+          color:#778; pointer-events:none; transition:opacity 1s; }
+  #guide { position:fixed; z-index:15; pointer-events:none; display:none; }
+</style>
+</head>
+<body>
+<a id="back" href="index.html">← lab</a>
+<div id="stage"></div>
+<svg id="guide" xmlns="http://www.w3.org/2000/svg"></svg>
+<div id="hud"><b>07 · Manga Street</b>  <span id="hudStat"></span>
+<span id="hudPerf">…</span></div>
+<div id="panel"></div>
+<div id="modebar"></div>
+<div id="hint">ドラッグ: 視点 / WASD: 移動 / ホイール: 前後 / Shift: 加速 / T: 俯瞰 / R: 再生成</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+
+/* ============================================================
+   utils — 乱数(mulberry32)・ヘルパー
+============================================================ */
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const hash2 = (a, b) => {
+  let h = (a | 0) ^ Math.imul(b | 0, 0x9E3779B1);
+  h = Math.imul(h ^ h >>> 16, 0x85EBCA6B);
+  h = Math.imul(h ^ h >>> 13, 0xC2B2AE35);
+  return (h ^ h >>> 16) >>> 0;
+};
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const rr = (rng, a, b) => a + rng() * (b - a);
+const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
+
+/* ============================================================
+   PARAMS — 再生成系(regen)とライブ系を分離
+============================================================ */
+const PARAMS = {
+  seed: 20260710,
+  roadType: 'local',      // local=4.5m / arterial=13m
+  sideRoadEvery: 55,      // 側道間隔(m)
+  setback: 1.2,           // 道路際余白(m)
+  houseGap: 0.8,          // 建物間ギャップ(m)
+  garageRatio: 0.4,       // ガレージ型比率
+  aptRatio: 0.12,         // アパート率
+  wires: true,            // 電線(S6)
+  signs: true,            // 看板文字(S11)
+  crossing: true,         // 踏切(S12)
+  mountains: true,        // 山並み(S8)
+  // --- ライブ系 ---
+  hour: 13.0,
+  overcast: false,
+  exposure: 1.0,
+  fov: 48, eyeH: 1.5, roll: 0,
+  mode: 'clay',           // clay / line / tone
+  lineWidth: 1, ss2x: true, nearBoost: true,
+  toneGain: 1.0, tonePitch: 5,
+  aspect: 'free', guides: false, mannequin: false, exportScale: 2,
+};
+const ROAD_W = { local: 4.5, arterial: 13 };
+
+/* ============================================================
+   パレット(sRGB hex → three が linear 変換)
+============================================================ */
+const PAL = {
+  sky:      0xccd6e0,
+  asphalt:  0xa4a4a2,
+  curb:     0xd8d7d4,
+  gutter:   0x8e8e8c,
+  sidewalk: 0xc4c3c0,
+  soil:     0xbdb6aa,
+  concrete: 0xc9c7c2,
+  gravel:   0xbfbcb4,
+  walls:  [0xf1efe9, 0xe9e3d8, 0xdedcd8, 0xd8cebe, 0xc6ccd0, 0xcfc4b2, 0xb9ab98],
+  roofs:  [0x70747a, 0x7c6c60, 0x5f6772, 0x8a8c8e, 0x635a52],
+  block:  [0xd3cfc6, 0xccc8bf],
+  fence:    0x9aa0a6,
+  hedge:  [0x7f9370, 0x74886a],
+  shutter:  0xb2b2ae,
+  glassDay: 0x39424e,
+  sash:     0xe8e8ea,
+  door:     0x6f665c,
+  bldg:   [0xc6cad0, 0xcdd0d4, 0xbfc4cb],
+  trunk:    0x8a7a66,
+  leaf:   [0x7d9270, 0x718666],
+};
+
+/* ============================================================
+   renderer / scene / camera
+============================================================ */
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(PAL.sky);
+scene.fog = new THREE.Fog(PAL.sky, 70, 260);
+
+const camera = new THREE.PerspectiveCamera(PARAMS.fov, 1, 0.1, 600);
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 500); // T 俯瞰
+orthoCam.position.set(0, 200, 0);
+orthoCam.up.set(0, 0, -1);      // 真下視点: up と視線の平行を回避
+orthoCam.lookAt(0, 0, 0);
+
+const L = 210; // 街の全長(z: -105..105)
+
+/* --- ライト --- */
+const hemi = new THREE.HemisphereLight(0xdfe8f0, 0x9a938a, 0.65);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff4e6, 2.6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 260;
+const SHADOW_R = 55;
+sun.shadow.camera.left = -SHADOW_R; sun.shadow.camera.right = SHADOW_R;
+sun.shadow.camera.top = SHADOW_R;  sun.shadow.camera.bottom = -SHADOW_R;
+sun.shadow.camera.updateProjectionMatrix();
+sun.shadow.normalBias = 0.03;
+scene.add(sun, sun.target);
+
+/* ============================================================
+   ジオメトリ部品 — 全パーツ {position,normal,color} 3属性に正規化
+============================================================ */
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+UNIT_BOX.deleteAttribute('uv');
+const UNIT_CYL = new THREE.CylinderGeometry(0.5, 0.5, 1, 10).toNonIndexed();
+UNIT_CYL.deleteAttribute('uv');
+const UNIT_ICO = new THREE.IcosahedronGeometry(0.5, 1);  // Polyhedron は元々 non-indexed
+UNIT_ICO.deleteAttribute('uv');
+
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion();
+const _v = new THREE.Vector3(), _s = new THREE.Vector3();
+const _c = new THREE.Color();
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+function colorize(g, hex) {
+  _c.set(hex);
+  const n = g.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) _c.toArray(arr, i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return g;
+}
+function place(unit, list, cx, cy, cz, sx, sy, sz, hex, ry = 0) {
+  const g = unit.clone();
+  _q.setFromAxisAngle(Y_AXIS, ry);
+  _m4.compose(_v.set(cx, cy, cz), _q, _s.set(sx, sy, sz));
+  g.applyMatrix4(_m4);
+  list.push(colorize(g, hex));
+}
+const box = (list, cx, cy, cz, sx, sy, sz, hex, ry) => place(UNIT_BOX, list, cx, cy, cz, sx, sy, sz, hex, ry);
+const cyl = (list, cx, cy, cz, r, h, hex) => place(UNIT_CYL, list, cx, cy, cz, r * 2, h, r * 2, hex);
+const blob = (list, cx, cy, cz, s, hex) => place(UNIT_ICO, list, cx, cy, cz, s, s, s, hex);
+
+/* 横倒し円柱(車輪・カーブミラー面など。軸=x → ry で向き変更) */
+const UNIT_CYL_X = UNIT_CYL.clone();
+UNIT_CYL_X.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 2));
+const cylX = (list, cx, cy, cz, r, len, hex, ry) => place(UNIT_CYL_X, list, cx, cy, cz, len, r * 2, r * 2, hex, ry);
+
+/* 電線・ワイヤ(カテナリー近似ベジェ or 直線) */
+function tube(list, curve, r, hex, seg = 12) {
+  const g = new THREE.TubeGeometry(curve, seg, r, 4, false).toNonIndexed();
+  g.deleteAttribute('uv');
+  g.deleteAttribute('normal');
+  g.computeVertexNormals();
+  list.push(colorize(g, hex));
+}
+function wire(list, x0, y0, z0, x1, y1, z1, sag, r, hex) {
+  const mid = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2 - sag * 2, (z0 + z1) / 2);
+  tube(list, new THREE.QuadraticBezierCurve3(
+    new THREE.Vector3(x0, y0, z0), mid, new THREE.Vector3(x1, y1, z1)), r, hex);
+}
+
+/* 山並み(稜線ポリゴンを直書き。fog 距離の外にあるため fog は切り、
+   applyLight で空色連動のシルエット色を乗算する) */
+const matMountain = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
+function mountainGeo(rng, hMax, hex) {
+  const N = 26, W2 = 640;
+  const ys = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const ridge = Math.sin(t * 9.2 + rng() * 1.4) * 0.35 + Math.sin(t * 3.1 + rng()) * 0.4 + 0.55;
+    ys.push(Math.max(3, ridge * hMax * (0.55 + rng() * 0.45)));
+  }
+  const pos = [];
+  for (let i = 0; i < N; i++) {
+    const x0 = -W2 / 2 + (i / N) * W2, x1 = -W2 / 2 + ((i + 1) / N) * W2;
+    pos.push(x0, 0, 0, x1, 0, 0, x1, ys[i + 1], 0,
+             x0, 0, 0, x1, ys[i + 1], 0, x0, ys[i], 0);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.computeVertexNormals();
+  return colorize(g, hex);
+}
+
+/* 粘土カー */
+const CAR_COLORS = [0xe8e8e6, 0xd8d8d6, 0xb8bcc2, 0x3a4048, 0x8a2e2e, 0x2e4a6a, 0xcfcabc];
+function clayCar(S, cx, cy, cz, ry, hex) {
+  box(S, cx, cy + 0.42, cz, 4.1, 0.62, 1.68, hex, ry);
+  box(S, cx - Math.sin(ry) * 0.25, cy + 0.95, cz - Math.cos(ry) * 0.25, 2.1, 0.52, 1.5, hex, ry);
+  const wob = [[1.32, 0.72], [1.32, -0.72], [-1.32, 0.72], [-1.32, -0.72]];
+  for (const [dz, dx] of wob) {
+    const wx = cx + Math.cos(ry) * dx + Math.sin(ry) * dz;
+    const wz = cz - Math.sin(ry) * dx + Math.cos(ry) * dz;
+    cylX(S, wx, cy + 0.3, wz, 0.3, 0.22, 0x2e2e32, ry);
+  }
+}
+
+/* 三角形リスト直書き(切妻・寄棟用) */
+function pushTris(list, pts, cx, cy, cz, hex, ry = 0) {
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => { pos[i*3] = p[0]; pos[i*3+1] = p[1]; pos[i*3+2] = p[2]; });
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  _q.setFromAxisAngle(Y_AXIS, ry);
+  _m4.compose(_v.set(cx, cy, cz), _q, _s.set(1, 1, 1));
+  g.applyMatrix4(_m4);
+  list.push(colorize(g, hex));
+}
+/* 切妻屋根(棟=z方向)。w=奥行(x) l=間口(z) h=棟高。CCW=外向き */
+function gableRoof(list, cx, cy, cz, w, l, h, hex) {
+  const x = w / 2, z = l / 2;
+  pushTris(list, [
+    [x,0,-z],[0,h,-z],[0,h,z],   [x,0,-z],[0,h,z],[x,0,z],     // 傾斜 +x
+    [-x,0,z],[0,h,z],[0,h,-z],   [-x,0,z],[0,h,-z],[-x,0,-z],  // 傾斜 -x
+    [x,0,z],[0,h,z],[-x,0,z],                                   // 妻 +z
+    [-x,0,-z],[0,h,-z],[x,0,-z],                                // 妻 -z
+  ], cx, cy, cz, hex);
+}
+/* 寄棟屋根。棟は長軸方向 */
+function hipRoof(list, cx, cy, cz, w, l, h, hex) {
+  let sw = w, sl = l, rot = 0;
+  if (w > l) { sw = l; sl = w; rot = Math.PI / 2; } // 常に sl >= sw(棟=z)で組んで回す
+  const x = sw / 2, z = sl / 2, rz = (sl - sw) / 2;
+  const A = [-x,0,-z], B = [x,0,-z], C = [x,0,z], D = [-x,0,z];
+  const P1 = [0,h,-rz], P2 = [0,h,rz];
+  pushTris(list, [
+    B,A,P1,            // 妻側三角 -z
+    D,C,P2,            // 妻側三角 +z
+    B,P1,P2, B,P2,C,   // 台形 +x
+    D,P2,P1, D,P1,A,   // 台形 -x
+  ], cx, cy, cz, hex, rot);
+}
+
+/* ============================================================
+   レイアウトエンジン — メッシュを作らない純データ
+============================================================ */
+function genLayout(P) {
+  const seed = P.seed | 0;
+  const rng = mulberry32(seed);
+  const roadW = ROAD_W[P.roadType];
+  const isArt = P.roadType === 'arterial';
+  const sidewalkW = isArt ? 2.0 : 0;
+  const edge0 = roadW / 2 + 0.5 + 0.15 + sidewalkW; // 側溝+縁石+歩道
+
+  // --- 側道帯 ---
+  const bands = [];   // {z0, z1, kind}
+  const sideRoads = [];
+  let z = -L / 2 + rr(rng, 18, 32);
+  while (z < L / 2 - 24) {
+    sideRoads.push({ z, w: 4.5 });
+    bands.push({ z0: z - 2.25 - 0.6, z1: z + 2.25 + 0.6, kind: 'road' });
+    z += P.sideRoadEvery * rr(rng, 0.85, 1.3);
+  }
+
+  // --- 踏切予約帯(側道と近すぎたら数回リトライ) ---
+  let railway = null;
+  if (P.crossing) {
+    for (let tryI = 0; tryI < 8 && !railway; tryI++) {
+      const rz = -L / 2 + rr(rng, 40, 150);
+      const ok = bands.every(b => rz + 5.5 < b.z0 - 6 || rz - 5.5 > b.z1 + 6);
+      if (ok) {
+        railway = { z: rz, w: 9 };
+        bands.push({ z0: rz - 4.5, z1: rz + 4.5, kind: 'rail' });
+      }
+    }
+  }
+  bands.sort((a, b) => a.z0 - b.z0);
+
+  // --- 区画(row0=道路沿い / row1=2列目簡易) ---
+  const plots = [];
+  let plotIndex = 0;
+  for (const side of [1, -1]) {
+    for (const row of [0, 1]) {
+      const xNear = edge0 + (row === 0 ? 0 : 17.5);
+      const depth = row === 0 ? rr(rng, 13, 16) : 12;
+      let pz = -L / 2 + 1.5;
+      while (pz < L / 2 - 9) {
+        const w = rr(rng, 8, 12.5);
+        const hit = bands.find(b => pz < b.z1 && pz + w > b.z0);
+        if (hit) { pz = hit.z1 + 0.4; continue; }
+        if (pz + w > L / 2 - 1) break;
+        const sub = hash2(seed, plotIndex * 2654435761 + side * 97 + row * 31);
+        const r2 = mulberry32(sub);
+        let kind = 'house';
+        if (row === 0) {
+          const roll = r2();
+          if (roll < P.aptRatio) kind = 'apt';
+          else if (roll < P.aptRatio + 0.05) kind = 'lot';
+        }
+        plots.push({ side, row, z0: pz, z1: pz + w, xNear, depth, sub, kind, groundY: 0 });
+        pz += w + rr(rng, 0.1, 0.7);
+        plotIndex++;
+      }
+    }
+  }
+
+  // --- 電柱(片側・~26m 間隔。踏切近傍は避ける) ---
+  const poles = [];
+  const poleX = roadW / 2 + 0.35 + sidewalkW;
+  for (let pz = -L / 2 + rr(rng, 4, 10); pz < L / 2 - 4; pz += rr(rng, 24, 30)) {
+    if (railway && Math.abs(pz - railway.z) < 7) continue;
+    poles.push({ x: poleX, z: pz });
+  }
+
+  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles };
+}
+
+/* ============================================================
+   街のビルド — 頂点色マージで少数メッシュへ
+============================================================ */
+const matSolid = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0 });
+const matGlass = new THREE.MeshBasicMaterial({ vertexColors: true });   // unlit(夜の点灯用)
+const matDbgLine = new THREE.LineBasicMaterial({ vertexColors: true });
+
+/* --- 夜間 FX(L1: 線画 RT に入れないレイヤー) --- */
+function makeRadialTex() {
+  const c2 = document.createElement('canvas');
+  c2.width = c2.height = 128;
+  const ctx = c2.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 62);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c2);
+}
+const gradTex = makeRadialTex();
+const matDecal = new THREE.MeshBasicMaterial({ map: gradTex, transparent: true, opacity: 0,
+  blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, fog: false });
+const matGlow = new THREE.PointsMaterial({ map: gradTex, transparent: true, opacity: 0,
+  blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, size: 2.4, sizeAttenuation: true, fog: false });
+
+const UNIT_PLANE = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);  // 路面デカール用(uv あり)
+function decal(D, cx, y, cz, r, hex) {
+  const g = UNIT_PLANE.clone().toNonIndexed();
+  _m4.compose(_v.set(cx, y, cz), _q.identity(), _s.set(r * 2, 1, r * 2));
+  g.applyMatrix4(_m4);
+  D.push(colorize(g, hex));
+}
+
+/* --- 看板文字アトラス(canvas 1 枚。L2=albedo に素材のまま追い描き → LINE で輪郭化) --- */
+const SIGN_UV = {};
+function buildSignAtlas() {
+  const c2 = document.createElement('canvas');
+  c2.width = 1024; c2.height = 512;
+  const ctx = c2.getContext('2d');
+  ctx.fillStyle = '#f2f0ea';
+  ctx.fillRect(0, 0, 1024, 512);
+  function cell(key, x, y, w, h, draw) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
+    draw(w, h);
+    ctx.restore();
+    SIGN_UV[key] = { u0: x / 1024, v0: 1 - (y + h) / 512, u1: (x + w) / 1024, v1: 1 - y / 512 };
+  }
+  const plate = (w, h, bg, fg, border) => {
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    if (border) { ctx.strokeStyle = fg; ctx.lineWidth = 5; ctx.strokeRect(7, 7, w - 14, h - 14); }
+    ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  };
+  const vtext = (txt, w, cy0, size, gap) => {
+    ctx.font = `bold ${size}px "Hiragino Sans", "Yu Gothic", sans-serif`;
+    [...txt].forEach((ch, i) => ctx.fillText(ch, w / 2, cy0 + i * gap));
+  };
+  cell('tsukigime', 0, 0, 256, 128, (w, h) => {
+    plate(w, h, '#f2f0ea', '#3a3a3e', true);
+    ctx.font = 'bold 40px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('月極駐車場', w / 2, h / 2 - 16);
+    ctx.font = 'bold 26px "Hiragino Sans", sans-serif';
+    ctx.fillText('空 有', w / 2, h / 2 + 32);
+  });
+  cell('tomare', 256, 0, 96, 256, (w, h) => {
+    ctx.fillStyle = '#a4a4a2'; ctx.fillRect(0, 0, w, h);   // アスファルト地
+    ctx.fillStyle = '#f0efe9'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    vtext('止まれ', w, 52, 62, 76);
+  });
+  cell('apt1', 0, 128, 256, 64, (w, h) => {
+    plate(w, h, '#e8e4da', '#4a4a50', false);
+    ctx.font = 'bold 34px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('コーポ青葉', w / 2, h / 2 + 2);
+  });
+  cell('apt2', 0, 192, 256, 64, (w, h) => {
+    plate(w, h, '#dfe2e6', '#3e4450', false);
+    ctx.font = 'bold 32px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('メゾン富士見', w / 2, h / 2 + 2);
+  });
+  cell('pole1', 352, 0, 64, 256, (w, h) => {
+    plate(w, h, '#e8e6de', '#33333a', true);
+    vtext('質おおくら', w, 36, 34, 46);
+  });
+  cell('pole2', 416, 0, 64, 256, (w, h) => {
+    plate(w, h, '#dde4e8', '#2e3e52', true);
+    vtext('山川不動産', w, 36, 34, 46);
+  });
+  cell('banchi', 0, 256, 192, 56, (w, h) => {
+    plate(w, h, '#3e5a80', '#f0f2f4', false);
+    ctx.font = 'bold 28px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('南町二丁目 12', w / 2, h / 2 + 1);
+  });
+  const t = new THREE.CanvasTexture(c2);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const signAtlas = buildSignAtlas();
+const matSign = new THREE.MeshStandardMaterial({ map: signAtlas, roughness: 0.9, metalness: 0,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+const matSignAlbedo = new THREE.MeshBasicMaterial({ map: signAtlas, fog: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+
+/* 看板 Plane(uv をアトラスセルに割付)。rx=-PI/2 で路面用 */
+function signPlane(list, key, cx, cy, cz, w, h, ry = 0, rx = 0) {
+  const e = SIGN_UV[key];
+  const g = new THREE.PlaneGeometry(w, h);
+  const uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, e.u0 + uv.getX(i) * (e.u1 - e.u0), e.v0 + uv.getY(i) * (e.v1 - e.v0));
+  }
+  if (rx) g.rotateX(rx);
+  if (ry) g.rotateY(ry);
+  g.translate(cx, cy, cz);
+  list.push(g);
+}
+
+/* --- 空ドーム(2 色グラデ。L1=線画対象外) --- */
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, fog: false, depthWrite: false,
+  uniforms: { uTop: { value: new THREE.Color(0x9cb8d8) }, uBot: { value: new THREE.Color(0xccd6e0) } },
+  vertexShader: /* glsl */`
+    varying float vH;
+    void main() {
+      vH = normalize(position).y;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying float vH;
+    uniform vec3 uTop, uBot;
+    void main() {
+      gl_FragColor = vec4(mix(uBot, uTop, smoothstep(-0.05, 0.55, vH)), 1.0);
+    }
+  `,
+});
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(340, 24, 12), skyMat);
+skyDome.layers.set(1);
+skyDome.renderOrder = -10;
+
+/* ============================================================
+   LINE パイプライン(EffectComposer 不使用の手組み G-buffer)
+   ① normal+depth RT ② albedo RT ③ edge 合成 RT(SS 2x)
+   ④ FullScreenQuad で膨張+紙白合成しながら画面へ縮小
+============================================================ */
+const matNormal = new THREE.MeshNormalMaterial();
+const matAlbedo = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
+
+const FSQ_VERT = /* glsl */`
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+
+const edgeMat = new THREE.ShaderMaterial({
+  uniforms: {
+    tNormal:   { value: null },
+    tDepth:    { value: null },
+    tAlbedo:   { value: null },
+    texel:     { value: new THREE.Vector2(1, 1) },
+    uNear:     { value: 0.1 },
+    uFar:      { value: 600 },
+    uThN:      { value: 0.4 },    // 法線エッジ閾値
+    uThD:      { value: 0.02 },   // depth 相対差閾値
+    uThA:      { value: 0.12 },   // アルベドエッジ閾値
+    uFadeStart:{ value: 60 },     // 近景強調: 線のフェード開始距離
+    uFadeEnd:  { value: 190 },
+    uNearBoost:{ value: 1 },
+  },
+  vertexShader: FSQ_VERT,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D tNormal, tDepth, tAlbedo;
+    uniform vec2 texel;
+    uniform float uNear, uFar, uThN, uThD, uThA, uFadeStart, uFadeEnd, uNearBoost;
+
+    float linD(vec2 uv) {
+      float d = texture2D(tDepth, uv).x;
+      return (2.0 * uNear * uFar) / (uFar + uNear - (d * 2.0 - 1.0) * (uFar - uNear));
+    }
+    void main() {
+      vec2 ox = vec2(texel.x, 0.0), oy = vec2(0.0, texel.y);
+      float dC = linD(vUv);
+      float dDiff = abs(linD(vUv + ox) - linD(vUv - ox))
+                  + abs(linD(vUv + oy) - linD(vUv - oy));
+      vec3 nC = texture2D(tNormal, vUv).xyz * 2.0 - 1.0;
+      vec3 nDx = texture2D(tNormal, vUv + ox).xyz - texture2D(tNormal, vUv - ox).xyz;
+      vec3 nDy = texture2D(tNormal, vUv + oy).xyz - texture2D(tNormal, vUv - oy).xyz;
+      vec3 aDx = texture2D(tAlbedo, vUv + ox).rgb - texture2D(tAlbedo, vUv - ox).rgb;
+      vec3 aDy = texture2D(tAlbedo, vUv + oy).rgb - texture2D(tAlbedo, vUv - oy).rgb;
+
+      // depth エッジ: 線形化+相対差+グレージング角補正(遠方路面の黒塗り防止)
+      float slope = 1.0 / max(abs(nC.z), 0.14);
+      float thD = uThD * dC * slope;
+      float eD = smoothstep(thD, thD * 2.0, dDiff);
+
+      // normal エッジ(凹の折れ線・稜線)
+      float nDiff = length(nDx) * 2.0 + length(nDy) * 2.0;
+      float eN = smoothstep(uThN, uThN * 1.8, nDiff);
+
+      // albedo エッジ(路面標示・目地・素材境界。照明不変)
+      float aDiff = length(aDx) + length(aDy);
+      float eA = smoothstep(uThA, uThA * 2.0, aDiff);
+
+      float e = max(eD, max(eN, eA));
+
+      // 近景強調: 遠景の線を紙白へフェード(空気遠近)
+      if (uNearBoost > 0.5) e *= 1.0 - smoothstep(uFadeStart, uFadeEnd, dC);
+
+      gl_FragColor = vec4(e, dC / uFar, 0.0, 1.0);
+    }
+  `,
+});
+
+const lineFinalMat = new THREE.ShaderMaterial({
+  uniforms: {
+    tEdge:   { value: null },
+    texelE:  { value: new THREE.Vector2(1, 1) },
+    uDilate: { value: 1 },
+    uPaper:  { value: new THREE.Color(0xf8f7f3) },
+    uInk:    { value: new THREE.Color(0x1c1c20) },
+  },
+  vertexShader: FSQ_VERT,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D tEdge;
+    uniform vec2 texelE;
+    uniform float uDilate;
+    uniform vec3 uPaper, uInk;
+    void main() {
+      float e = 0.0;
+      for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+          float fd = max(abs(float(dx)), abs(float(dy)));
+          if (fd > uDilate + 0.01) continue;
+          e = max(e, texture2D(tEdge, vUv + vec2(float(dx), float(dy)) * texelE).r);
+        }
+      }
+      gl_FragColor = vec4(mix(uPaper, uInk, e), 1.0);
+    }
+  `,
+});
+
+/* TONE: 線画 + 輝度量子化 45° 網点(最終解像度でかける — 縮小すると網点が灰に溶けるため) */
+const toneFinalMat = new THREE.ShaderMaterial({
+  uniforms: {
+    tEdge:   { value: null },
+    tBeauty: { value: null },
+    texelE:  { value: new THREE.Vector2(1, 1) },
+    uDilate: { value: 1 },
+    uPaper:  { value: new THREE.Color(0xf8f7f3) },
+    uInk:    { value: new THREE.Color(0x1c1c20) },
+    uGain:   { value: 1 },
+    uPitch:  { value: 5 },
+  },
+  vertexShader: FSQ_VERT,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D tEdge, tBeauty;
+    uniform vec2 texelE;
+    uniform float uDilate, uGain, uPitch;
+    uniform vec3 uPaper, uInk;
+    void main() {
+      float e = 0.0;
+      for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+          float fd = max(abs(float(dx)), abs(float(dy)));
+          if (fd > uDilate + 0.01) continue;
+          e = max(e, texture2D(tEdge, vUv + vec2(float(dx), float(dy)) * texelE).r);
+        }
+      }
+      vec3 c = texture2D(tBeauty, vUv).rgb;
+      c = c / (c + 1.0);                                   // 簡易トーンマップ(RT はリニアのため)
+      float lum = pow(dot(c, vec3(0.299, 0.587, 0.114)), 0.6) * uGain * 1.35;  // sRGB 近似で持ち上げ
+
+      // 硬い 4 帯: 白 / 薄トーン / 濃トーン / ベタ
+      float density = lum > 0.66 ? 0.0 : lum > 0.45 ? 0.28 : lum > 0.26 ? 0.52 : 1.0;
+
+      // 45° 回転ドットグリッド(device px 基準)
+      vec2 p = mat2(0.70710678, -0.70710678, 0.70710678, 0.70710678) * gl_FragCoord.xy / uPitch;
+      float d = length(fract(p) - 0.5) * 2.0;
+      float radius = sqrt(density) * 1.13;
+      float dotInk = density >= 0.99 ? 1.0 : (1.0 - smoothstep(radius - 0.18, radius + 0.18, d));
+
+      float ink = max(e, dotInk * (density > 0.0 ? 1.0 : 0.0));
+      gl_FragColor = vec4(mix(uPaper, uInk, ink), 1.0);
+    }
+  `,
+});
+
+const fsq = new FullScreenQuad(edgeMat);
+
+let rtNormal = null, rtAlbedo = null, rtEdge = null, rtBeauty = null, rtSizeKey = '';
+function disposeRTs() {
+  rtNormal?.depthTexture?.dispose();
+  rtNormal?.dispose(); rtAlbedo?.dispose(); rtEdge?.dispose(); rtBeauty?.dispose();
+  rtNormal = rtAlbedo = rtEdge = rtBeauty = null;
+  rtSizeKey = '';
+}
+function ensureRTs() {
+  // 実バッファ px 基準(PNG 書き出しの一時リサイズにも追従)
+  const bw2 = renderer.domElement.width, bh2 = renderer.domElement.height;
+  const ss = (PARAMS.ss2x && !exporting) ? 2 : 1;   // 書き出しは出力自体が高解像度なので SS 不要
+  let W = Math.max(4, bw2 * ss), H = Math.max(4, bh2 * ss);
+  const maxT = renderer.capabilities.maxTextureSize;  // WebGL 上限を超えると FBO incomplete/黒画像
+  const mxD = Math.max(W, H);
+  if (mxD > maxT) { const k = maxT / mxD; W = Math.floor(W * k); H = Math.floor(H * k); }
+  const key = W + 'x' + H;
+  if (key === rtSizeKey) return;
+  disposeRTs();
+  rtNormal = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  rtNormal.depthTexture = new THREE.DepthTexture(W, H);
+  rtAlbedo = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  rtEdge   = new THREE.WebGLRenderTarget(W, H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  let BW = bw2, BH = bh2;                              // TONE 用 beauty(最終解像度)も上限内に
+  const mxB = Math.max(BW, BH);
+  if (mxB > maxT) { const k = maxT / mxB; BW = Math.floor(BW * k); BH = Math.floor(BH * k); }
+  rtBeauty = new THREE.WebGLRenderTarget(BW, BH, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  edgeMat.uniforms.texel.value.set(1 / W, 1 / H);
+  lineFinalMat.uniforms.texelE.value.set(1 / W, 1 / H);
+  toneFinalMat.uniforms.texelE.value.set(1 / W, 1 / H);
+  rtSizeKey = key;
+}
+
+function renderStylized(activeCam, tone) {
+  ensureRTs();
+
+  // ⓪ TONE のみ: beauty(CLAY と同じ絵)を最終解像度 RT に(影も更新)
+  if (tone) {
+    renderer.shadowMap.autoUpdate = true;
+    activeCam.layers.enableAll();
+    renderer.setRenderTarget(rtBeauty);
+    renderer.clear();
+    renderer.render(scene, activeCam);
+  }
+
+  renderer.shadowMap.autoUpdate = false;   // G-buffer パスに影は不要
+  const bg = scene.background, fg = scene.fog;
+  scene.background = null;
+  scene.fog = null;
+  activeCam.layers.set(0);                 // L0=ソリッドのみ(空・夜FX・dbg 線を除外)
+
+  // ① normal + depth
+  scene.overrideMaterial = matNormal;
+  renderer.setRenderTarget(rtNormal);
+  renderer.setClearColor(0x8080ff, 1);     // 背景=カメラ向き法線
+  renderer.clear();
+  renderer.render(scene, activeCam);
+
+  // ② albedo(頂点色 unlit)+ L2 看板を素材のまま追い描き(文字を線画に乗せる)
+  scene.overrideMaterial = matAlbedo;
+  renderer.setRenderTarget(rtAlbedo);
+  renderer.setClearColor(0xffffff, 1);     // 空=紙
+  renderer.clear();
+  renderer.render(scene, activeCam);
+  scene.overrideMaterial = matSignAlbedo;
+  activeCam.layers.set(2);
+  renderer.autoClear = false;
+  renderer.render(scene, activeCam);
+  renderer.autoClear = true;
+
+  scene.overrideMaterial = null;
+  scene.background = bg;
+  scene.fog = fg;
+  activeCam.layers.enableAll();
+
+  // ③ エッジ合成(SS 解像度)
+  edgeMat.uniforms.tNormal.value = rtNormal.texture;
+  edgeMat.uniforms.tDepth.value = rtNormal.depthTexture;
+  edgeMat.uniforms.tAlbedo.value = rtAlbedo.texture;
+  edgeMat.uniforms.uNear.value = activeCam.near;
+  edgeMat.uniforms.uFar.value = activeCam.far;
+  edgeMat.uniforms.uNearBoost.value = PARAMS.nearBoost ? 1 : 0;
+  renderer.setRenderTarget(rtEdge);
+  fsq.material = edgeMat;
+  fsq.render(renderer);
+
+  // ④ 最終合成(LINE=膨張+紙白 / TONE=+量子化網点)。縮小=SS AA
+  const fm = tone ? toneFinalMat : lineFinalMat;
+  fm.uniforms.tEdge.value = rtEdge.texture;
+  fm.uniforms.uDilate.value = PARAMS.lineWidth;
+  if (tone) {
+    fm.uniforms.tBeauty.value = rtBeauty.texture;
+    fm.uniforms.uGain.value = PARAMS.toneGain;
+    fm.uniforms.uPitch.value = PARAMS.tonePitch * exportPitchScale;
+  }
+  renderer.setRenderTarget(null);
+  fsq.material = fm;
+  fsq.render(renderer);
+}
+let exportPitchScale = 1;   // PNG 書き出し時に網点ピッチを倍率追従させる
+
+function renderFrame(mode, activeCam) {
+  if (mode === 'clay') {
+    renderer.shadowMap.autoUpdate = true;
+    activeCam.layers.enableAll();
+    renderer.render(scene, activeCam);
+  } else {
+    renderStylized(activeCam, mode === 'tone');
+  }
+}
+
+let city = null;   // { group, geos[], layout, dbg }
+let topView = false;
+
+function segmentsAvoiding(z0, z1, bands, pad = 0) {
+  const out = [];
+  let cur = z0;
+  const bs = bands.filter(b => b.z1 > z0 && b.z0 < z1).sort((a, b) => a.z0 - b.z0);
+  for (const b of bs) {
+    if (b.z0 - pad > cur) out.push([cur, b.z0 - pad]);
+    cur = Math.max(cur, b.z1 + pad);
+  }
+  if (cur < z1) out.push([cur, z1]);
+  return out;
+}
+
+function buildCity(layout) {
+  const S = [];       // 不透明ソリッド(線画対象)
+  const G = [];       // 窓ガラス unlit ※box のみ追加可(窓 index=gi*36 頂点の前提)
+  const W = [];       // 窓メタ {gi, litAt} — S8 の夜間点灯で頂点色を書き換える
+  const D = [];       // 夜の明かりだまりデカール(L1)
+  const GLOW = { pos: [], col: [] };  // グロースプライト(L1)
+  const SIGN = [];    // 看板文字 Plane(L2)
+  const { roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, seed } = layout;
+  const bands = [];
+  for (const sr of sideRoads) bands.push({ z0: sr.z - sr.w / 2, z1: sr.z + sr.w / 2 });
+  if (railway) bands.push({ z0: railway.z - 3.5, z1: railway.z + 3.5 });
+
+  /* --- 地面ベース --- */
+  box(S, 0, -0.06, 0, 420, 0.1, 420, PAL.soil);
+
+  /* --- メイン道路 --- */
+  box(S, 0, 0.005, 0, roadW, 0.03, L + 30, PAL.asphalt);
+  for (const s of [1, -1]) {
+    box(S, s * (roadW / 2 + 0.25), 0.006, 0, 0.5, 0.028, L + 30, PAL.gutter);
+  }
+  for (const s of [1, -1]) {
+    for (const [a, b] of segmentsAvoiding(-L / 2 - 10, L / 2 + 10, bands, 0.4)) {
+      box(S, s * (roadW / 2 + 0.575), 0.075, (a + b) / 2, 0.15, 0.15, b - a, PAL.curb);
+    }
+  }
+  if (isArt) {
+    for (const s of [1, -1]) {
+      for (const [a, b] of segmentsAvoiding(-L / 2 - 10, L / 2 + 10, bands, 0.4)) {
+        box(S, s * (roadW / 2 + 0.65 + sidewalkW / 2), 0.04, (a + b) / 2, sidewalkW, 0.08, b - a, PAL.sidewalk);
+      }
+    }
+    for (const [a, b] of segmentsAvoiding(-L / 2, L / 2, bands, 1)) {
+      for (let cz = a + 2; cz + 5 < b - 2; cz += 8) {
+        box(S, 0, 0.022, cz + 2.5, 0.15, 0.006, 5, 0xf5f5f0);
+      }
+    }
+  }
+
+  /* --- 側道 --- */
+  for (const sr of sideRoads) {
+    box(S, 0, 0.004, sr.z, 90, 0.026, sr.w, PAL.asphalt);
+    for (const s of [1, -1]) {
+      box(S, 0, 0.005, sr.z + s * (sr.w / 2 + 0.2), 90, 0.024, 0.4, PAL.gutter);
+    }
+  }
+
+  /* --- 踏切(非電化単線: バラスト・レール・枕木・踏切道) --- */
+  if (railway) {
+    const rz = railway.z;
+    box(S, 0, 0.01, rz, 220, 0.05, 5.2, 0x8e8a82);                    // バラスト
+    for (let tx = -110; tx < 110; tx += 0.62) {                        // 枕木
+      if (Math.abs(tx) < roadW / 2 + 1.4) continue;                    // 踏切道部は舗装
+      box(S, tx + 0.2, 0.045, rz, 0.24, 0.05, 2.3, 0x5a5048);
+    }
+    for (const dz of [-0.72, 0.72]) {                                  // レール 2 条
+      box(S, 0, 0.1, rz + dz, 220, 0.1, 0.09, 0x86888c);
+    }
+    box(S, 0, 0.028, rz, roadW + 2.6, 0.056, 4.6, 0x9a968e);           // 踏切道(舗装板)
+    for (const dz of [-0.72, 0.72]) {                                  // 踏切道のレール溝再現(上に細レール)
+      box(S, 0, 0.075, rz + dz, roadW + 2.6, 0.05, 0.09, 0x7e8084);
+    }
+  }
+
+  /* --- 区画 --- */
+  for (const plot of plots) {
+    buildPlot(plot, layout, S, G, W, SIGN);
+  }
+
+  /* --- 路面標示(停止線・横断歩道・ダイヤ)+「止まれ」 --- */
+  const rngM = mulberry32(hash2(seed, 555));
+  for (const sr of sideRoads) {
+    for (const s of [1, -1]) {   // 停止線(側道側)
+      box(S, s * (roadW / 2 + 1.3), 0.02, sr.z + 1.1, 0.45, 0.008, 2.6, 0xeeeeea);
+      if (PARAMS.signs) {
+        signPlane(SIGN, 'tomare', s * (roadW / 2 + 2.9), 0.025, sr.z + 1.1, 0.85, 2.3, s > 0 ? Math.PI / 2 : -Math.PI / 2, -Math.PI / 2);
+      }
+    }
+  }
+  if (sideRoads.length) {        // 横断歩道は最初の交差点に
+    const cw = sideRoads[0];
+    const cwZ = cw.z - cw.w / 2 - 1.5;
+    for (let i = 0; i < Math.floor(roadW / 0.9); i++) {
+      box(S, -roadW / 2 + 0.65 + i * 0.9, 0.02, cwZ, 0.5, 0.008, 2.2, 0xeeeeea);
+    }
+    // ダイヤマーク(手前)
+    for (const dz of [14, 24]) {
+      box(S, 0, 0.02, cwZ + dz, 0.5, 0.008, 1.5, 0xeeeeea, Math.PI / 4);
+    }
+  }
+
+  /* --- カーブミラー(交差点角) --- */
+  for (const sr of sideRoads) {
+    const mx = roadW / 2 + 0.7, mz = sr.z + sr.w / 2 + 0.7;
+    cyl(S, mx, 1.3, mz, 0.045, 2.6, 0x8a8e92);
+    cylX(S, mx, 2.35, mz, 0.38, 0.07, 0xe8862a, Math.PI / 4);          // 橙枠
+    cylX(S, mx + 0.028, 2.35, mz - 0.028, 0.31, 0.035, 0xcfd8de, Math.PI / 4);  // 鏡面
+  }
+
+  /* --- 自販機(電柱の隣にたまに) --- */
+  for (const p of poles) {
+    if (rngM() > 0.28) continue;
+    const vx = p.x + 0.85, vz = p.z + 1.3;
+    const bodyC = rngM() < 0.5 ? 0xd8dcde : 0xb43c3c;
+    box(S, vx, 0.92, vz, 0.72, 1.84, 1.05, bodyC);
+    box(G, vx - 0.38, 1.15, vz, 0.05, 1.05, 0.85, 0xd8e4ea);   // 前面パネル(道路向き)
+    W.push({ gi: G.length - 1, litAt: 0 });                      // 夜は常時点灯
+    decal(D, vx - 1.0, 0.045, vz, 2.4, 0xbfe0f0);
+    GLOW.pos.push(vx - 0.42, 1.2, vz);
+    GLOW.col.push(0.7, 0.88, 1);
+  }
+
+  /* --- ゴミ集積ネット(側道角にたまに) --- */
+  for (const sr of sideRoads) {
+    if (rngM() > 0.5) continue;
+    box(S, -(roadW / 2 + 1.1), 0.26, sr.z + sr.w / 2 + 1.6, 1.0, 0.5, 1.5, 0x5e6e60);
+  }
+
+  /* --- 電柱+電線+防犯灯 --- */
+  if (poles.length) {
+    let adI = 0;
+    for (const p of poles) {
+      cyl(S, p.x, 5.0, p.z, 0.13, 10.0, 0xb4b2ac);                 // 柱
+      // 巻き看板(たまに)
+      if (PARAMS.signs && rngM() < 0.3) {
+        const key = adI++ % 2 ? 'pole1' : 'pole2';
+        box(S, p.x - 0.16, 2.6, p.z, 0.07, 1.5, 0.4, 0xe8e6de);
+        signPlane(SIGN, key, p.x - 0.21, 2.6, p.z, 0.36, 1.44, -Math.PI / 2);
+      }
+      box(S, p.x, 9.3, p.z, 1.7, 0.09, 0.09, 0x9a988f);            // 腕金(道路直交)
+      for (const ax of [-0.7, 0, 0.7]) {                            // 碍子
+        cyl(S, p.x + ax, 9.42, p.z, 0.05, 0.16, 0xe8e6e0);
+      }
+      if (rngM() < 0.4) cyl(S, p.x + 0.28, 8.35, p.z, 0.33, 1.0, 0x8e8c84);  // 変圧器
+      // 黄黒の注意テープ(根元)
+      for (let i = 0; i < 3; i++) {
+        cyl(S, p.x, 0.65 + i * 0.42, p.z, 0.135, 0.21, i % 2 ? 0x2e2e30 : 0xd8b32e);
+      }
+      // 防犯灯(道路側アーム)+夜のプール・グロー
+      box(S, p.x - 0.5, 5.42, p.z, 1.0, 0.05, 0.06, 0x8a8e92);
+      box(S, p.x - 0.95, 5.33, p.z, 0.44, 0.13, 0.17, 0xd8dce0);
+      decal(D, p.x - 0.95, 0.04, p.z, 5.5, 0xffdda0);
+      GLOW.pos.push(p.x - 0.95, 5.26, p.z);
+      GLOW.col.push(1, 0.85, 0.55);
+    }
+    if (PARAMS.wires) {
+      const wireC = 0x2e2e32;
+      for (let i = 0; i < poles.length - 1; i++) {
+        const a = poles[i], b = poles[i + 1];
+        const sag = Math.abs(b.z - a.z) / 55;
+        for (const [dx, wy] of [[-0.7, 9.42], [0.7, 9.42], [0, 9.95]]) {
+          wire(S, a.x + dx, wy, a.z, b.x + dx, wy, b.z, sag, 0.035, wireC);
+        }
+        // 中層の通信線
+        wire(S, a.x, 7.6, a.z, b.x, 7.6, b.z, sag * 1.3, 0.045, 0x3a3a3e);
+      }
+      // 引込線(電柱 → 同側 row0 の最寄りの家の軒)
+      for (const p of poles) {
+        let best = null, bd2 = 1e9;
+        for (const pl of plots) {
+          if (pl.row !== 0 || pl.side !== 1 || !pl.house || pl.house.isApt) continue;
+          const dz = Math.abs((pl.z0 + pl.z1) / 2 - p.z);
+          if (dz < bd2) { bd2 = dz; best = pl; }
+        }
+        if (best && bd2 < 16) {
+          const h = best.house;
+          wire(S, p.x, 8.9, p.z, h.cx, 0.44 + h.H - 0.25, h.cz + 0.4, 0.35, 0.028, wireC);
+        }
+      }
+      // 支線(両端の電柱から地面へ)
+      for (const p of [poles[0], poles[poles.length - 1]]) {
+        const dir = p === poles[0] ? -1 : 1;
+        const az = p.z + dir * 3.2;
+        tube(S, new THREE.LineCurve3(new THREE.Vector3(p.x, 9.0, p.z), new THREE.Vector3(p.x + 0.3, 0, az)), 0.03, 0x4a4a4e, 2);
+        tube(S, new THREE.LineCurve3(new THREE.Vector3(p.x + 0.22, 2.4, az - dir * 0.8), new THREE.Vector3(p.x + 0.3, 0.05, az)), 0.07, 0xd8c832, 2);
+      }
+    }
+  }
+
+  /* --- 遠景ビル群 --- */
+  const rngD = mulberry32(hash2(seed, 777));
+  for (let i = 0; i < 14; i++) {
+    const bx = rr(rngD, 38, 90) * (rngD() < 0.5 ? 1 : -1);
+    const bz = rr(rngD, -L / 2 - 40, L / 2 + 40);
+    const bw = rr(rngD, 8, 16), bd = rr(rngD, 8, 14), bh = rr(rngD, 9, 26);
+    box(S, bx, bh / 2, bz, bw, bh, bd, pick(rngD, PAL.bldg));
+    box(S, bx, bh + 0.3, bz, bw + 0.4, 0.6, bd + 0.4, 0x9fa3a8);
+  }
+  for (let i = 0; i < 4; i++) {
+    const bx = rr(rngD, -18, 18);
+    const bh = rr(rngD, 10, 22);
+    box(S, bx, bh / 2, -L / 2 - rr(rngD, 25, 55), rr(rngD, 10, 18), bh, rr(rngD, 8, 14), pick(rngD, PAL.bldg));
+  }
+
+  /* --- 山並みシルエット(fog に溶ける unlit 稜線。L1=線画対象外) --- */
+  const mountainMeshes = [];
+  if (PARAMS.mountains) {
+    const rngMt = mulberry32(hash2(seed, 999));
+    // 頂点色は無彩の係数(遠=空に近い/近=わずかに濃い)。実際の色は applyLight が空色を乗算
+    for (const [bz, hMax, hex] of [[-315, 46, 0xf2f2f2], [-285, 30, 0xdedede]]) {
+      const geo = mountainGeo(rngMt, hMax, hex);
+      geo.translate(0, 0, bz);
+      const m = new THREE.Mesh(geo, matMountain);
+      m.layers.set(1);
+      mountainMeshes.push(m);
+    }
+  }
+
+  /* --- マージ --- */
+  const group = new THREE.Group();
+  const geos = [];
+  const solidGeo = mergeGeometries(S, false);
+  solidGeo.computeBoundingSphere();
+  const solidMesh = new THREE.Mesh(solidGeo, matSolid);
+  solidMesh.castShadow = true;
+  solidMesh.receiveShadow = true;
+  group.add(solidMesh);
+  geos.push(solidGeo);
+  for (const m of mountainMeshes) { group.add(m); geos.push(m.geometry); }
+
+  let glassMesh = null;
+  if (G.length) {
+    const glassGeo = mergeGeometries(G, false);
+    glassGeo.computeBoundingSphere();
+    glassMesh = new THREE.Mesh(glassGeo, matGlass);
+    group.add(glassMesh);
+    geos.push(glassGeo);
+  }
+
+  /* --- 夜間 FX(デカール+グロー、L1) --- */
+  if (D.length) {
+    const dGeo = mergeGeometries(D, false);
+    dGeo.computeBoundingSphere();
+    const dMesh = new THREE.Mesh(dGeo, matDecal);
+    dMesh.layers.set(1);
+    dMesh.renderOrder = 5;
+    group.add(dMesh);
+    geos.push(dGeo);
+  }
+  if (GLOW.pos.length) {
+    const gGeo = new THREE.BufferGeometry();
+    gGeo.setAttribute('position', new THREE.Float32BufferAttribute(GLOW.pos, 3));
+    gGeo.setAttribute('color', new THREE.Float32BufferAttribute(GLOW.col, 3));
+    const gPts = new THREE.Points(gGeo, matGlow);
+    gPts.layers.set(1);
+    gPts.renderOrder = 6;
+    group.add(gPts);
+    geos.push(gGeo);
+  }
+
+  /* --- 看板(L2: albedo に素材のまま追い描き) --- */
+  if (SIGN.length) {
+    const sGeo = mergeGeometries(SIGN, false);
+    sGeo.computeBoundingSphere();
+    const sMesh = new THREE.Mesh(sGeo, matSign);
+    sMesh.layers.set(2);
+    sMesh.receiveShadow = true;
+    group.add(sMesh);
+    geos.push(sGeo);
+  }
+
+  /* --- 踏切の動的オブジェクト(警報機・遮断機・電車) --- */
+  let crossing = null;
+  if (railway) {
+    crossing = buildCrossingDynamics(railout(layout), group, geos);
+  }
+
+  /* --- 俯瞰デバッグ線 --- */
+  const dbg = buildDebugLines(layout);
+  dbg.visible = topView;
+  dbg.layers.set(1);   // 線画 RT に混ぜない
+  group.add(dbg);
+  geos.push(dbg.geometry);
+
+  return { group, geos, layout, dbg, windows: W, glassMesh, crossing };
+}
+function railout(layout) {
+  return { rz: layout.railway.z, roadW: layout.roadW };
+}
+
+/* --- 踏切: 警報機 2 基+遮断機 2 基+2 両ディーゼル(動的) --- */
+const matLampOff = new THREE.MeshStandardMaterial({ color: 0x581818, roughness: 0.6 });
+const matLampOn  = new THREE.MeshBasicMaterial({ color: 0xff2a20 });
+function buildCrossingDynamics({ rz, roadW }, group, geos) {
+  const cross = { state: 'idle', t: 0, nextAt: 6, gates: [], lamps: [], train: null, rz };
+  const dg = [];   // 動的で使い捨てない小 geometry(dispose 用)
+  const track = g => { dg.push(g); return g; };
+
+  // 警報機(道路の両側・対角): 柱+×印+ランプ 2
+  for (const s of [1, -1]) {
+    const px = s * (roadW / 2 + 1.3), pz = rz - s * 3.1;   // 対角配置
+    const g1 = [];
+    box(g1, px, 2.0, pz, 0.1, 4.0, 0.1, 0x3a3a3e);
+    // ×印(z 回転棒 2 本)+ランプ台
+    for (const a of [Math.PI / 4, -Math.PI / 4]) {
+      const bar = track(UNIT_BOX.clone());
+      _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), a);
+      _m4.compose(_v.set(px, 3.75, pz), _q, _s.set(1.5, 0.14, 0.06));
+      bar.applyMatrix4(_m4);
+      g1.push(colorize(bar, 0xdfdcd4));
+    }
+    box(g1, px, 3.1, pz, 0.85, 0.32, 0.12, 0x2e2e32);   // ランプ台
+    const sGeo = mergeGeometries(g1, false);
+    const sm = new THREE.Mesh(sGeo, matSolid);
+    sm.castShadow = true;
+    group.add(sm);
+    geos.push(sGeo);
+    // ランプ 2 灯(色切替のため個別メッシュ)
+    for (const dx of [-0.28, 0.28]) {
+      const lampGeo = track(new THREE.CylinderGeometry(0.13, 0.13, 0.09, 12).rotateX(Math.PI / 2).toNonIndexed());
+      lampGeo.deleteAttribute('uv');
+      const lamp = new THREE.Mesh(lampGeo, matLampOff);
+      lamp.position.set(px + dx, 3.1, pz + (rz > pz ? -0.08 : 0.08));
+      group.add(lamp);
+      geos.push(lampGeo);
+      cross.lamps.push(lamp);
+    }
+    // 遮断機: ピボット Group+縞バー
+    const pivot = new THREE.Group();
+    pivot.position.set(px, 1.05, pz + (rz > pz ? 1.0 : -1.0));
+    const barLen = roadW / 2 + 1.1;
+    const segs = [];
+    const nSeg = 6;
+    for (let i = 0; i < nSeg; i++) {
+      segs.push(track(UNIT_BOX.clone()));
+      _m4.compose(_v.set(-s * (i + 0.5) * (barLen / nSeg), 0, 0), _q.identity(), _s.set(barLen / nSeg, 0.09, 0.09));
+      segs[i].applyMatrix4(_m4);
+      colorize(segs[i], i % 2 ? 0x2e2e30 : 0xe8c832);
+    }
+    const barGeo = mergeGeometries(segs, false);
+    const barMesh = new THREE.Mesh(barGeo, matSolid);
+    barMesh.castShadow = true;
+    pivot.add(barMesh);
+    pivot.rotation.z = s * THREE.MathUtils.degToRad(82);   // 初期=上がっている
+    group.add(pivot);
+    geos.push(barGeo);
+    cross.gates.push({ pivot, s });
+  }
+
+  // 2 両ディーゼル(x 方向に通過)
+  const train = new THREE.Group();
+  const tBody = [];
+  for (const off of [0, 12.6]) {
+    box(tBody, off, 1.9, 0, 12, 2.6, 2.55, 0xc8d0d4);                    // 車体
+    box(tBody, off, 3.28, 0, 11.6, 0.18, 2.35, 0x8a8e92);                // 屋根
+    box(tBody, off, 2.35, 0, 11.2, 0.78, 2.62, 0x3e4a58);                // 窓帯
+    box(tBody, off, 0.92, 0, 11.4, 0.5, 2.4, 0x8a4838);                  // 裾帯
+    for (const bx of [-3.6, 3.6]) {
+      box(tBody, off + bx, 0.42, 0, 2.2, 0.55, 2.2, 0x2e2e32);           // 台車
+    }
+  }
+  const tGeo = mergeGeometries(tBody, false);
+  const tMesh = new THREE.Mesh(tGeo, matSolid);
+  tMesh.castShadow = true;
+  train.add(tMesh);
+  train.position.set(400, 0.1, rz);   // 画面外で待機
+  group.add(train);
+  geos.push(tGeo);
+  cross.train = train;
+
+  dg.length = 0;   // track した一時 geometry は merge 済みなので参照だけ切る
+  return cross;
+}
+
+/* 踏切ステートマシン(tick から) */
+function updateCrossing(dt) {
+  const c = city?.crossing;
+  if (!c) return;
+  c.t += dt;
+  const setGates = (deg) => {
+    for (const g of c.gates) g.pivot.rotation.z = g.s * THREE.MathUtils.degToRad(deg);
+  };
+  const blink = () => {
+    const on = Math.floor(c.t / 0.55) % 2;
+    c.lamps.forEach((l, i) => { l.material = (i % 2 === on) ? matLampOn : matLampOff; });
+  };
+  switch (c.state) {
+    case 'idle':
+      if (c.t > c.nextAt) { c.state = 'warn'; c.t = 0; }
+      break;
+    case 'warn': {
+      blink();
+      const k = Math.min(1, c.t / 3);
+      setGates(82 * (1 - k * k));
+      if (k >= 1) { c.state = 'closed'; c.t = 0; c.train.position.x = 170; }
+      break;
+    }
+    case 'closed': {
+      blink();
+      c.train.position.x = 170 - c.t * 26;    // 26 m/s ≒ 94km/h のローカル線
+      if (c.train.position.x < -190) { c.state = 'open'; c.t = 0; }
+      break;
+    }
+    case 'open': {
+      const k = Math.min(1, c.t / 2.2);
+      setGates(82 * k * k);
+      if (k >= 1) {
+        c.state = 'idle'; c.t = 0;
+        c.nextAt = 20 + Math.random() * 22;
+        c.lamps.forEach(l => l.material = matLampOff);
+        c.train.position.x = 400;
+      }
+      break;
+    }
+  }
+}
+
+/* --- 1 区画 --- */
+function buildPlot(plot, layout, S, G, W, SIGN) {
+  const rng = mulberry32(plot.sub);
+  const { side, row, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const cx = side * (xNear + depth / 2);
+  const cz = (z0 + z1) / 2;
+
+  // 敷地面
+  box(S, cx, 0.012, cz, depth, 0.05, w, plot.kind === 'lot' ? PAL.gravel : PAL.concrete);
+
+  if (plot.kind === 'lot') {  // 月極駐車場: フェンス+看板+駐車車両
+    for (const zz of [z0 + 0.1, z1 - 0.1]) {
+      box(S, cx, 0.55, zz, depth, 1.0, 0.06, PAL.fence);
+    }
+    box(S, side * (xNear + depth - 0.05), 0.55, cz, 0.06, 1.0, w, PAL.fence);
+    if (PARAMS.signs) {
+      const sx = side * (xNear + 0.35);
+      box(S, sx, 1.25, cz, 0.08, 0.85, 1.65, 0xe8e6e0);
+      cyl(S, sx, 0.45, cz - 0.6, 0.035, 0.9, 0x8a8e92);
+      cyl(S, sx, 0.45, cz + 0.6, 0.035, 0.9, 0x8a8e92);
+      signPlane(SIGN, 'tsukigime', sx - side * 0.06, 1.25, cz, 1.55, 0.78, side > 0 ? -Math.PI / 2 : Math.PI / 2);
+    }
+    const nCars = 1 + Math.floor(rng() * Math.min(3, w / 3));
+    for (let i = 0; i < nCars; i++) {
+      if (rng() < 0.3) continue;
+      clayCar(S, side * (xNear + depth * 0.5), 0.02, z0 + 1.9 + i * 2.8, Math.PI / 2 + rr(rng, -0.04, 0.04), pick(rng, CAR_COLORS));
+    }
+    return;
+  }
+
+  if (plot.kind === 'apt') buildApt(plot, rng, S, G, W, SIGN);
+  else buildHouse(plot, rng, S, G, W);
+
+  /* --- 塀(前面・門開口つき) --- */
+  const setback = PARAMS.setback;
+  if (row === 0 && setback > 0.25) {
+    const fenceX = side * (xNear + 0.06);
+    const gateW = rng() < PARAMS.garageRatio ? rr(rng, 2.6, 4.6) : rr(rng, 1.2, 1.9);
+    const gateC = cz + rr(rng, -w * 0.2, w * 0.2);
+    const segs = [[z0 + 0.05, gateC - gateW / 2], [gateC + gateW / 2, z1 - 0.05]].filter(s => s[1] - s[0] > 0.3);
+    const fType = rng();
+    for (const [a, b] of segs) {
+      const len = b - a, mz = (a + b) / 2;
+      if (fType < 0.45) {          // ブロック塀(段+目地線)
+        for (let i = 0; i < 3; i++) {
+          box(S, fenceX, 0.2 + i * 0.4, mz, 0.14, 0.4, len, PAL.block[i % 2]);
+        }
+        for (let i = 1; i < 3; i++) {
+          box(S, fenceX, i * 0.4, mz, 0.148, 0.022, len, 0xb0aca2);   // 目地
+        }
+        box(S, fenceX, 1.26, mz, 0.18, 0.07, len, 0xc5c1b8);
+      } else if (fType < 0.75) {   // フェンス(基礎+横棒+支柱)
+        box(S, fenceX, 0.22, mz, 0.13, 0.44, len, PAL.block[0]);
+        box(S, fenceX, 0.66, mz, 0.05, 0.05, len, PAL.fence);
+        box(S, fenceX, 0.95, mz, 0.05, 0.05, len, PAL.fence);
+        for (let pz = a + 0.6; pz < b - 0.3; pz += 1.8) {
+          box(S, fenceX, 0.7, pz, 0.05, 0.55, 0.05, PAL.fence);
+        }
+      } else {                     // 生け垣(セグメントで緑を交互)
+        const n = Math.max(1, Math.round(len / 1.4));
+        for (let i = 0; i < n; i++) {
+          const sz = len / n;
+          box(S, fenceX, 0.55, a + sz * (i + 0.5), 0.5, 1.05, sz * 0.96, PAL.hedge[i % 2]);
+        }
+      }
+    }
+    // 門柱
+    for (const gz of [gateC - gateW / 2, gateC + gateW / 2]) {
+      if (gz > z0 && gz < z1) box(S, fenceX, 0.68, gz, 0.28, 1.36, 0.28, PAL.block[0]);
+    }
+  }
+
+  /* --- 庭木 --- */
+  const trees = row === 0 ? Math.floor(rng() * 2.4) : Math.floor(rng() * 1.4);
+  for (let i = 0; i < trees; i++) {
+    const tx = side * (xNear + rr(rng, depth * 0.55, depth * 0.9));
+    const tz = rr(rng, z0 + 1, z1 - 1);
+    const th = rr(rng, 1.6, 3.2);
+    cyl(S, tx, th * 0.35, tz, 0.07, th * 0.7, PAL.trunk);
+    blob(S, tx, th * 0.75, tz, th * 0.75, pick(rng, PAL.leaf));
+    blob(S, tx + 0.3, th * 0.95, tz + 0.2, th * 0.5, pick(rng, PAL.leaf));
+  }
+}
+
+/* --- 窓(サッシ=S、ガラス=G+W メタ)。nx=壁面法線の向き(±x) --- */
+function frontWindow(S, G, W, fx, cy, cz, w, h, nx, rng) {
+  box(S, fx + nx * 0.02, cy, cz, 0.12, h + 0.14, w + 0.14, PAL.sash);
+  box(G, fx + nx * 0.085, cy, cz, 0.02, h, w, PAL.glassDay);   // サッシ前面より僅かに前
+  W.push({ gi: G.length - 1, litAt: 16.6 + rng() * 4.6 });
+}
+function sideWindow(S, G, W, cx, cy, fz, w, h, nz, rng) {
+  box(S, cx, cy, fz + nz * 0.02, w + 0.14, h + 0.14, 0.12, PAL.sash);
+  box(G, cx, cy, fz + nz * 0.085, w, h, 0.02, PAL.glassDay);
+  W.push({ gi: G.length - 1, litAt: 16.6 + rng() * 4.6 });
+}
+
+/* --- 戸建て --- */
+function buildHouse(plot, rng, S, G, W) {
+  const { side, row, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const gap = PARAMS.houseGap, setback = PARAMS.setback;
+  const bw = Math.max(4.5, w - gap * 2);                       // 間口(z)
+  const bd = Math.min(rr(rng, 6.5, 9), depth - setback - 2);   // 奥行(x)
+  const floors = row === 0 ? pick(rng, [1, 2, 2, 2, 2, 3]) : pick(rng, [1, 2, 2]);
+  const fh = 2.85;
+  const H = floors * fh;
+  const cx = side * (xNear + setback + bd / 2);
+  const cz = (z0 + z1) / 2 + rr(rng, -0.4, 0.4);
+  const wall = pick(rng, PAL.walls);
+  const roof = pick(rng, PAL.roofs);
+  const frontX = side * (xNear + setback);   // 前面の壁位置(符号付き)
+
+  // 基礎+本体
+  box(S, cx, 0.22, cz, bd + 0.06, 0.44, bw + 0.06, 0x9b968e);
+  box(S, cx, 0.44 + H / 2, cz, bd, H, bw, wall);
+
+  const out = -side;   // 前面(道路)方向
+
+  // ガレージ型(ビルトイン): 前面下部にシャッター面
+  const hasGarage = row === 0 && rng() < PARAMS.garageRatio;
+  let garageZ = null;
+  if (hasGarage && floors >= 2) {
+    garageZ = cz + (rng() < 0.5 ? -1 : 1) * bw * 0.22;
+    box(S, frontX + out * 0.06, 0.44 + 1.15, garageZ, 0.14, 2.3, 2.6, PAL.shutter);
+    box(S, frontX + out * 0.02, 0.44 + 2.42, garageZ, 0.3, 0.24, 2.8, wall);   // まぐさ
+  } else if (hasGarage) {
+    // カーポート+車
+    const px = side * (xNear + 1.7);
+    const pz = rng() < 0.5 ? z0 + 1.7 : z1 - 1.7;
+    for (const dx of [-1.1, 1.1]) for (const dz of [-2.1, 2.1]) {
+      box(S, px + side * dx, 1.15, pz + dz, 0.09, 2.3, 0.09, 0x8b8f94);
+    }
+    box(S, px, 2.34, pz, 2.6, 0.08, 4.6, 0xb9bcbf);
+    if (rng() < 0.65) clayCar(S, px, 0.02, pz, Math.PI / 2, pick(rng, CAR_COLORS));
+  }
+
+  // 屋根(oversize)
+  const rw = bd + 0.55, rl = bw + 0.55, ry0 = 0.44 + H;
+  const rt = rng();
+  if (rt < 0.5)      gableRoof(S, cx, ry0, cz, rw, rl, rr(rng, 1.2, 1.9), roof);
+  else if (rt < 0.8) hipRoof(S, cx, ry0, cz, rw, rl, rr(rng, 1.1, 1.6), roof);
+  else {             // 陸屋根+パラペット
+    box(S, cx, ry0 + 0.1, cz, rw - 0.2, 0.2, rl - 0.2, roof);
+    for (const s2 of [1, -1]) {
+      box(S, cx + s2 * (rw / 2 - 0.15), ry0 + 0.3, cz, 0.12, 0.55, rl, wall);
+      box(S, cx, ry0 + 0.3, cz + s2 * (rl / 2 - 0.15), rw, 0.55, 0.12, wall);
+    }
+  }
+
+  // 玄関(前面 1F): ドア+庇+ポーチ+植木鉢
+  const doorZ = cz + (rng() < 0.5 ? -1 : 1) * rr(rng, bw * 0.15, bw * 0.32);
+  box(S, frontX + out * 0.055, 0.44 + 1.05, doorZ, 0.1, 2.1, 0.95, PAL.door);
+  box(S, frontX + out * 0.35, 0.44 + 2.28, doorZ, 0.9, 0.09, 1.5, roof);
+  box(S, frontX + out * 0.3, 0.2, doorZ, 0.8, 0.12, 1.3, PAL.concrete);
+  if (rng() < 0.5) {
+    for (let i = 0; i < 1 + Math.floor(rng() * 2.4); i++) {
+      const pz2 = doorZ + 0.95 + i * 0.32;
+      cyl(S, frontX + out * 0.25, 0.11, pz2, 0.12, 0.22, 0x9a6a4a);
+      blob(S, frontX + out * 0.25, 0.32, pz2, 0.3, pick(rng, PAL.leaf));
+    }
+  }
+
+  /* --- 窓 --- */
+  // 1F: 掃き出し窓(玄関・ガレージと反対側)
+  const w1z = 2 * cz - doorZ;   // 玄関の反対
+  if (!garageZ || Math.abs(w1z - garageZ) > 2.2) {
+    frontWindow(S, G, W, frontX, 0.44 + 1.15, w1z, 1.65, 1.8, out, rng);
+  }
+  // 2F〜: 前面窓グリッド
+  for (let f = 2; f <= floors; f++) {
+    const cy = 0.44 + (f - 1) * fh + 1.45;
+    const hasBalcony = f === 2 && row === 0 && rng() < 0.55;
+    if (hasBalcony) {
+      const blen = Math.min(bw - 0.8, 3.6);
+      const by = 0.44 + (f - 1) * fh;
+      const bx = frontX + out * 0.48;
+      box(S, bx, by + 0.05, cz, 1.0, 0.1, blen, wall);                     // スラブ
+      box(S, frontX + out * 0.93, by + 0.6, cz, 0.08, 1.0, blen, shade(wall, 0.88)); // 手すり壁
+      for (const s2 of [1, -1]) {
+        box(S, bx, by + 0.6, cz + s2 * (blen / 2 - 0.04), 0.9, 1.0, 0.08, shade(wall, 0.88));
+      }
+      frontWindow(S, G, W, frontX, cy - 0.15, cz, Math.min(2.6, blen - 0.7), 1.75, out, rng);
+      if (rng() < 0.3) {   // 布団
+        box(S, frontX + out * 0.93, by + 1.08, cz + rr(rng, -0.5, 0.5), 0.3, 0.5, 1.7, pick(rng, [0xd8b8b8, 0xb8c4d8, 0xd8d0b0]));
+      }
+    } else {
+      const nWin = bw > 7 ? 2 : 1;
+      for (let i = 0; i < nWin; i++) {
+        const wz = cz + (nWin === 1 ? rr(rng, -0.8, 0.8) : (i - 0.5) * bw * 0.42);
+        frontWindow(S, G, W, frontX, cy, wz, 1.2, 1.05, out, rng);
+      }
+    }
+  }
+  // 側面の小窓(z± の見えやすい側)
+  if (row === 0) {
+    const zFace = rng() < 0.5 ? cz - bw / 2 : cz + bw / 2;
+    const nz = zFace > cz ? 1 : -1;
+    for (let f = 1; f <= floors; f++) {
+      if (rng() < 0.4) continue;
+      sideWindow(S, G, W, cx + rr(rng, -bd * 0.2, bd * 0.2), 0.44 + (f - 1) * fh + 1.5, zFace, 0.65, 0.65, nz, rng);
+    }
+  }
+
+  /* --- 雨樋(縦樋)+室外機+プロパン --- */
+  cyl(S, frontX + out * 0.08, H / 2 + 0.44, cz - bw / 2 + 0.12, 0.045, H, shade(wall, 0.8));
+  if (rng() < 0.7) {
+    const az = rng() < 0.5 ? z0 + 0.9 : z1 - 0.9;
+    box(S, cx + rr(rng, -1, 1), 0.35, az, 0.29, 0.56, 0.8, 0xe4e4e0);
+  }
+  if (rng() < 0.3) {
+    for (const dz of [0, 0.42]) cyl(S, side * (xNear + depth - 0.5), 0.6, cz + dz, 0.17, 1.2, 0xdcdcd8);
+  }
+
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall, roof, doorZ, frontX: xNear + setback };
+}
+/* 色を暗くする(頂点色バリエーション用) */
+function shade(hex, k) {
+  const r = Math.round(((hex >> 16) & 255) * k), g2 = Math.round(((hex >> 8) & 255) * k), b = Math.round((hex & 255) * k);
+  return (r << 16) | (g2 << 8) | b;
+}
+
+/* --- アパート(3F・陸屋根・バルコニー連続) --- */
+function buildApt(plot, rng, S, G, W, SIGN) {
+  const { side, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const bw = w - 0.9, bd = Math.min(8.5, depth - PARAMS.setback - 1.5);
+  const floors = 3, fh = 2.7, H = floors * fh;
+  const cx = side * (xNear + PARAMS.setback + bd / 2);
+  const cz = (z0 + z1) / 2;
+  const wall = pick(rng, [0xe4e0d6, 0xd8d4cc, 0xcfd2d6]);
+  const frontX = side * (xNear + PARAMS.setback);
+
+  box(S, cx, 0.25, cz, bd + 0.1, 0.5, bw + 0.1, 0x9b968e);
+  box(S, cx, 0.5 + H / 2, cz, bd, H, bw, wall);
+  box(S, cx, 0.5 + H + 0.28, cz, bd + 0.15, 0.56, bw + 0.15, wall);
+  box(S, cx, 0.5 + H / 2, z1 - 0.3, bd * 0.4, H, 1.4, 0xb7bcc2);  // 外階段の箱
+
+  // 各階バルコニー(前面連続)+窓 2-3
+  const out = -side;
+  const blen = bw - 1.8;
+  const units = Math.max(2, Math.floor(blen / 3));
+  for (let f = 1; f <= floors; f++) {
+    const by = 0.5 + (f - 1) * fh;
+    box(S, frontX + out * 0.45, by + 0.05, cz - 0.6, 0.95, 0.1, blen, wall);
+    box(S, frontX + out * 0.88, by + 0.58, cz - 0.6, 0.07, 0.96, blen, 0xaab0b6);
+    for (let u = 0; u < units; u++) {
+      const wz = cz - 0.6 + (u - (units - 1) / 2) * (blen / units);
+      frontWindow(S, G, W, frontX, by + 1.4, wz, 1.5, 1.7, out, rng);
+      if (rng() < 0.5) box(S, frontX + out * 0.6, by + 0.35, wz + 0.9, 0.28, 0.52, 0.75, 0xe4e4e0); // 室外機
+    }
+  }
+  // 建物名プレート(前面壁の上部)
+  if (SIGN && PARAMS.signs) {
+    const key = rng() < 0.5 ? 'apt1' : 'apt2';
+    signPlane(SIGN, key, frontX + out * 0.03, 0.5 + H - 0.65, cz + bw * 0.28, 2.1, 0.48,
+              side > 0 ? -Math.PI / 2 : Math.PI / 2);
+  }
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall, isApt: true };
+}
+
+/* --- 俯瞰デバッグ線(区画=緑 / 道路=白 / 踏切=赤 / 電柱=黄) --- */
+function buildDebugLines(layout) {
+  const pos = [], col = [];
+  const c = new THREE.Color();
+  const rect = (x0, z0, x1, z1, hex, y = 0.3) => {
+    c.set(hex);
+    const pts = [[x0,z0],[x1,z0],[x1,z0],[x1,z1],[x1,z1],[x0,z1],[x0,z1],[x0,z0]];
+    for (const [x, z] of pts) { pos.push(x, y, z); col.push(c.r, c.g, c.b); }
+  };
+  for (const p of layout.plots) {
+    const xa = p.side * p.xNear, xb = p.side * (p.xNear + p.depth);
+    rect(Math.min(xa, xb), p.z0, Math.max(xa, xb), p.z1,
+         p.kind === 'apt' ? 0x77ffcc : p.kind === 'lot' ? 0xffcc77 : 0x66dd66);
+  }
+  rect(-layout.roadW / 2, -L / 2, layout.roadW / 2, L / 2, 0xffffff);
+  for (const sr of layout.sideRoads) rect(-45, sr.z - sr.w / 2, 45, sr.z + sr.w / 2, 0xffffff);
+  if (layout.railway) rect(-100, layout.railway.z - 4.5, 100, layout.railway.z + 4.5, 0xff5555);
+  for (const p of layout.poles) rect(p.x - 0.4, p.z - 0.4, p.x + 0.4, p.z + 0.4, 0xffee55, 0.5);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return new THREE.LineSegments(g, matDbgLine);
+}
+
+/* ============================================================
+   再生成(dispose 単一起点)
+============================================================ */
+function regenerate() {
+  if (city) {
+    scene.remove(city.group);
+    city.geos.forEach(g => g.dispose());
+    city = null;
+  }
+  city = buildCity(genLayout(PARAMS));
+  scene.add(city.group);
+  history.replaceState(null, '', stateToHash());
+  updateHudStatic();
+  applyLight();   // 新 glassMesh の窓色を現在時刻に合わせる
+}
+
+/* URL に「このカット」を保存(seed+時刻+カメラ+モード+コマ枠+街並みパラメータの差分) */
+const GEN_KEYS = ['roadType', 'sideRoadEvery', 'setback', 'houseGap', 'garageRatio', 'aptRatio',
+                  'wires', 'signs', 'crossing', 'mountains'];
+const GEN_DEFAULTS = Object.fromEntries(GEN_KEYS.map(k => [k, PARAMS[k]]));
+const AR_OK = ['free', '4:3', '16:9', '2:1', '3:4'];
+
+function stateToHash() {
+  const p = [cam.pos.x, cam.pos.y, cam.pos.z, cam.yaw, cam.pitch].map(v => +v.toFixed(2)).join(',');
+  let h = `#s=${PARAMS.seed}&t=${PARAMS.hour}&cam=${p}&fov=${PARAMS.fov}&roll=${PARAMS.roll}` +
+          `&mode=${PARAMS.mode}&ar=${encodeURIComponent(PARAMS.aspect)}`;
+  for (const k of GEN_KEYS) {
+    if (PARAMS[k] !== GEN_DEFAULTS[k]) h += `&${k}=${encodeURIComponent(PARAMS[k])}`;
+  }
+  return h;
+}
+function parseHash() {
+  const h = location.hash.slice(1);
+  if (!h) return;
+  const q = new URLSearchParams(h);
+  if (q.get('s')) PARAMS.seed = parseInt(q.get('s')) || PARAMS.seed;
+  if (q.get('t')) PARAMS.hour = clamp(parseFloat(q.get('t')) || 13, 4, 24);
+  if (q.get('fov')) PARAMS.fov = clamp(parseFloat(q.get('fov')) || 48, 20, 100);
+  if (q.get('roll')) PARAMS.roll = clamp(parseFloat(q.get('roll')) || 0, -15, 15);
+  if (q.get('mode') && ['clay', 'line', 'tone'].includes(q.get('mode'))) PARAMS.mode = q.get('mode');
+  const ar = q.get('ar') && decodeURIComponent(q.get('ar'));
+  if (ar && AR_OK.includes(ar)) PARAMS.aspect = ar;   // 未検証値で canvas を NaN にしない
+  for (const k of GEN_KEYS) {
+    const v = q.get(k);
+    if (v == null) continue;
+    const d = GEN_DEFAULTS[k];
+    if (typeof d === 'boolean') PARAMS[k] = v === 'true';
+    else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
+    else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
+  }
+  const cs = q.get('cam');
+  if (cs) {
+    const [x, y, z, yaw, pitch] = cs.split(',').map(parseFloat);
+    if ([x, y, z, yaw, pitch].every(Number.isFinite)) {
+      cam.pos.set(x, y, z);
+      cam.yaw = yaw;
+      cam.pitch = pitch;
+      PARAMS.eyeH = y;
+    }
+  }
+}
+
+/* ============================================================
+   時刻 → 光(4:00-24:00 フルレンジ。stops を区分 lerp)
+============================================================ */
+const _sunDir = new THREE.Vector3(0.5, 1, -0.3).normalize();
+const _skyColor = new THREE.Color(PAL.sky);
+const _c2 = new THREE.Color(), _c3 = new THREE.Color();
+
+const BOT_STOPS  = [[4,0x232c40],[5.5,0x90a0b8],[7,0xc8d2de],[12,0xccd6e0],[16.5,0xccd2d8],
+                    [17.8,0xe8c298],[18.8,0x8a6880],[19.8,0x2c3248],[21,0x181e2e],[24,0x121620]];
+const TOP_STOPS  = [[4,0x131a2c],[5.5,0x48587a],[7,0x93aecd],[12,0x9cb8d8],[16.5,0x96accc],
+                    [17.8,0x8088b8],[18.8,0x464068],[19.8,0x1a2036],[21,0x121828],[24,0x0e1220]];
+const SUN_I      = [[4,0],[5.3,0],[6,1.1],[9,2.4],[12,2.7],[15,2.4],[17,1.8],[18.2,1.0],[18.8,0.25],[19.2,0],[24,0]];
+const SUN_C      = [[4,0xffb070],[5.5,0xffb070],[7,0xffd8b0],[10,0xfff4e6],[15,0xfff4e6],[17,0xffd8a0],[18.6,0xff9058],[19.2,0xa8bce0],[24,0xa8bce0]];
+const HEMI_I     = [[4,0.3],[6,0.45],[9,0.72],[12,0.85],[16,0.72],[18,0.45],[19.5,0.32],[24,0.28]];
+const MOON_I     = [[4,0.42],[5.2,0.2],[6,0],[18.5,0],[19.5,0.28],[21,0.44],[24,0.46]];
+const NIGHT_FX   = [[4,0.85],[5.2,0.35],[6,0],[17,0],[18,0.35],[19.5,1],[24,1]];   // 窓・街灯の点き具合
+
+function lerpStops(stops, h) {
+  if (h <= stops[0][0]) return stops[0][1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [h0, v0] = stops[i], [h1, v1] = stops[i + 1];
+    if (h >= h0 && h <= h1) return lerp(v0, v1, (h - h0) / Math.max(1e-4, h1 - h0));
+  }
+  return stops[stops.length - 1][1];
+}
+function lerpColorStops(stops, h, target) {
+  if (h <= stops[0][0]) return target.setHex(stops[0][1]);
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [h0, v0] = stops[i], [h1, v1] = stops[i + 1];
+    if (h >= h0 && h <= h1) {
+      return target.setHex(v0).lerp(_c3.setHex(v1), (h - h0) / Math.max(1e-4, h1 - h0));
+    }
+  }
+  return target.setHex(stops[stops.length - 1][1]);
+}
+
+const GLASS_DAY = new THREE.Color(PAL.glassDay);
+const GLASS_NIGHT = new THREE.Color(0x10141c);
+const GLASS_LIT = [new THREE.Color(0xffca70).multiplyScalar(1.5),
+                   new THREE.Color(0xffe2a0).multiplyScalar(1.5),
+                   new THREE.Color(0xf2e8c8).multiplyScalar(1.4)];
+const VEND_DAY = new THREE.Color(0xd8e4ea);
+const VEND_LIT = new THREE.Color(0xcfefff).multiplyScalar(1.6);
+
+function updateWindowLights(fx) {
+  if (!city?.glassMesh) return;
+  const attr = city.glassMesh.geometry.attributes.color;
+  const h = PARAMS.hour;
+  const nightish = fx > 0.12;
+  for (const w of city.windows) {
+    let c;
+    if (w.litAt === 0) {                    // 自販機パネル
+      c = nightish ? VEND_LIT : VEND_DAY;
+    } else if (!nightish) {
+      c = GLASS_DAY;
+    } else {
+      const lit = h < 6 ? (w.gi % 9 === 0) : h >= w.litAt;   // 未明はほぼ消灯
+      c = lit ? GLASS_LIT[w.gi % 3] : GLASS_NIGHT;
+    }
+    const off = w.gi * 36 * 3;
+    for (let i = 0; i < 36; i++) c.toArray(attr.array, off + i * 3);
+  }
+  attr.needsUpdate = true;
+}
+
+function applyLight() {
+  const h = PARAMS.hour;
+  const t = clamp((h - 5.7) / (18.8 - 5.7), 0, 1);   // 太陽軌道 0..1
+  const day = h >= 5.7 && h <= 18.8;
+  const fx = PARAMS.overcast ? Math.max(lerpStops(NIGHT_FX, h), 0) : lerpStops(NIGHT_FX, h);
+
+  if (day) {
+    _sunDir.set(Math.cos(Math.PI * t), Math.max(Math.sin(Math.PI * t), 0.03) * 1.08,
+                -Math.sin(Math.PI * t) * 0.62).normalize();  // 南=-z 寄り
+  } else {
+    _sunDir.set(0.32, 0.82, -0.42).normalize();               // 月
+  }
+
+  if (PARAMS.overcast && day) {
+    sun.intensity = 0.22;
+    sun.castShadow = false;
+    hemi.intensity = 1.05;
+    hemi.color.setHex(0xdfe3e8);
+    _skyColor.setHex(0xc2c6cc);
+    skyMat.uniforms.uTop.value.setHex(0xaeb4bc);
+    skyMat.uniforms.uBot.value.copy(_skyColor);
+  } else {
+    sun.intensity = lerpStops(SUN_I, h) + lerpStops(MOON_I, h);
+    sun.castShadow = true;
+    lerpColorStops(SUN_C, h, sun.color);
+    hemi.intensity = lerpStops(HEMI_I, h);
+    hemi.color.setHex(h >= 19 || h < 5.5 ? 0x4a5878 : 0xdfe8f0);
+    lerpColorStops(BOT_STOPS, h, _skyColor);
+    lerpColorStops(TOP_STOPS, h, skyMat.uniforms.uTop.value);
+    skyMat.uniforms.uBot.value.copy(_skyColor);
+  }
+  hemi.groundColor.setHex(0x9a938a).multiplyScalar(Math.max(0.25, 1 - fx * 0.75));
+  scene.background.copy(_skyColor);
+  scene.fog.color.copy(_skyColor);
+  matMountain.color.copy(_skyColor).multiplyScalar(0.9);   // 空より一段濃いシルエット
+  renderer.toneMappingExposure = PARAMS.exposure;
+
+  // 夜間 FX(デカール・グロー・窓)
+  matDecal.opacity = 0.5 * fx;
+  matGlow.opacity = 0.95 * fx;
+  updateWindowLights(fx);
+}
+
+/* 影ボックスをカメラ前方に追従(テクセルスナップ) */
+function updateShadowBox() {
+  const ahead = 22;
+  const tx = cam.pos.x - Math.sin(cam.yaw) * ahead;
+  const tz = cam.pos.z - Math.cos(cam.yaw) * ahead;
+  const texel = (SHADOW_R * 2) / sun.shadow.mapSize.x;
+  const sx = Math.round(tx / texel) * texel;
+  const sz = Math.round(tz / texel) * texel;
+  sun.target.position.set(sx, 0, sz);
+  sun.position.set(sx + _sunDir.x * 110, _sunDir.y * 110, sz + _sunDir.z * 110);
+  sun.target.updateMatrixWorld();
+}
+
+/* ============================================================
+   ウォークカメラ
+============================================================ */
+const cam = {
+  pos: new THREE.Vector3(1.1, PARAMS.eyeH, 88),
+  yaw: 0, pitch: -0.02,
+};
+const keys = {};
+
+function applyCamera() {
+  camera.fov = PARAMS.fov;
+  camera.updateProjectionMatrix();
+  cam.pos.y = PARAMS.eyeH;
+  camera.position.copy(cam.pos);
+  camera.quaternion.setFromEuler(new THREE.Euler(cam.pitch, cam.yaw, THREE.MathUtils.degToRad(PARAMS.roll), 'YXZ'));
+}
+
+const cv = renderer.domElement;
+let dragging = false, lastX = 0, lastY = 0;
+cv.addEventListener('pointerdown', e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  cv.setPointerCapture(e.pointerId);
+  hint.style.opacity = '0';
+});
+cv.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  cam.yaw -= (e.clientX - lastX) * 0.0034;
+  cam.pitch = clamp(cam.pitch - (e.clientY - lastY) * 0.0034, -1.45, 1.45);
+  lastX = e.clientX; lastY = e.clientY;
+});
+cv.addEventListener('pointerup', () => dragging = false);
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const d = e.deltaY > 0 ? 2.2 : -2.2;
+  cam.pos.x += Math.sin(cam.yaw) * d;
+  cam.pos.z += Math.cos(cam.yaw) * d;
+}, { passive: false });
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  keys[e.code] = true;
+  if (e.code === 'KeyT') { topView = !topView; if (city) city.dbg.visible = topView; }
+  if (e.code === 'KeyR') { PARAMS.seed = (Math.random() * 1e9) | 0; regenerate(); syncPanel(); }
+});
+addEventListener('keyup', e => keys[e.code] = false);
+
+function moveCamera(dt) {
+  const sp = (keys.ShiftLeft || keys.ShiftRight ? 12 : 4.2) * dt;
+  let fw = 0, st = 0;
+  if (keys.KeyW || keys.ArrowUp) fw += 1;
+  if (keys.KeyS || keys.ArrowDown) fw -= 1;
+  if (keys.KeyA || keys.ArrowLeft) st -= 1;
+  if (keys.KeyD || keys.ArrowRight) st += 1;
+  if (fw) {
+    cam.pos.x -= Math.sin(cam.yaw) * sp * fw;
+    cam.pos.z -= Math.cos(cam.yaw) * sp * fw;
+  }
+  if (st) {
+    cam.pos.x += Math.cos(cam.yaw) * sp * st;
+    cam.pos.z -= Math.sin(cam.yaw) * sp * st;
+  }
+  cam.pos.x = clamp(cam.pos.x, -140, 140);
+  cam.pos.z = clamp(cam.pos.z, -140, 140);
+}
+
+/* ============================================================
+   UI — スキーマ駆動パネル+モードバー+HUD
+============================================================ */
+const panel = document.getElementById('panel');
+const modebar = document.getElementById('modebar');
+const hudStat = document.getElementById('hudStat');
+const hudPerf = document.getElementById('hudPerf');
+const hint = document.getElementById('hint');
+
+const SCHEMA = [
+  { sec: '街並み(再生成)', open: true, items: [
+    { k: 'roadType', label: '道路タイプ', type: 'select', opts: { local: '生活道路 4.5m', arterial: '幹線 13m' }, regen: true },
+    { k: 'sideRoadEvery', label: '側道間隔', type: 'range', min: 35, max: 120, step: 5, unit: 'm', regen: true },
+    { k: 'setback', label: '道路際余白', type: 'range', min: 0, max: 3, step: 0.1, unit: 'm', regen: true },
+    { k: 'houseGap', label: '建物ギャップ', type: 'range', min: 0.2, max: 2.5, step: 0.1, unit: 'm', regen: true },
+    { k: 'garageRatio', label: 'ガレージ型比率', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
+    { k: 'aptRatio', label: 'アパート率', type: 'range', min: 0, max: 0.4, step: 0.02, pct: true, regen: true },
+    { k: 'wires', label: '電線', type: 'check', regen: true },
+    { k: 'signs', label: '看板文字', type: 'check', regen: true },
+    { k: 'crossing', label: '踏切', type: 'check', regen: true },
+    { k: 'mountains', label: '遠景の山', type: 'check', regen: true },
+  ]},
+  { sec: '光・カメラ', open: true, items: [
+    { k: 'hour', label: '時刻', type: 'range', min: 4, max: 24, step: 0.25,
+      fmt: v => `${Math.floor(v)}:${String(Math.round(v % 1 * 60)).padStart(2, '0')}` },
+    { k: 'overcast', label: '曇天', type: 'check' },
+    { k: 'exposure', label: '露出', type: 'range', min: 0.3, max: 2.2, step: 0.05 },
+    { k: 'fov', label: 'FOV', type: 'range', min: 20, max: 100, step: 1, unit: '°' },
+    { k: 'eyeH', label: '目線高さ', type: 'range', min: 0.4, max: 12, step: 0.1, unit: 'm' },
+    { k: 'roll', label: 'ロール', type: 'range', min: -15, max: 15, step: 0.5, unit: '°' },
+  ]},
+  { sec: '線画・トーン(出力)', open: false, items: [
+    { k: 'lineWidth', label: '線幅', type: 'range', min: 0, max: 2, step: 1 },
+    { k: 'ss2x', label: '2倍解像度処理', type: 'check' },
+    { k: 'nearBoost', label: '近景強調', type: 'check' },
+    { k: 'toneGain', label: 'トーン濃度', type: 'range', min: 0.4, max: 2.4, step: 0.05 },
+    { k: 'tonePitch', label: '網点ピッチ', type: 'range', min: 3, max: 10, step: 1, unit: 'px' },
+    { k: 'aspect', label: 'コマ枠', type: 'select',
+      opts: { free: '自由', '4:3': '4:3', '16:9': '16:9', '2:1': '2:1(ワイド)', '3:4': '3:4(縦)' } },
+    { k: 'guides', label: 'ガイド線', type: 'check' },
+    { k: 'mannequin', label: 'マネキン(1.6m)', type: 'check' },
+    { k: 'exportScale', label: 'PNG 倍率', type: 'select', opts: { 1: '1x', 2: '2x', 4: '4x' } },
+  ]},
+];
+
+let regenTimer = 0;
+function scheduleRegen() {
+  clearTimeout(regenTimer);
+  regenTimer = setTimeout(regenerate, 250);
+}
+
+const ctrlRefs = {};
+let seedValEl = null;
+
+function buildPanel() {
+  panel.replaceChildren();
+
+  // seed セクション
+  const seedSec = document.createElement('details');
+  seedSec.open = true;
+  const seedSum = document.createElement('summary');
+  seedSum.textContent = 'seed';
+  const seedBody = document.createElement('div');
+  seedBody.className = 'sec-body';
+  const btnrow = document.createElement('div');
+  btnrow.className = 'btnrow';
+  const btnRegen = document.createElement('button');
+  btnRegen.textContent = '⟳ 再生成 (R)';
+  btnRegen.onclick = () => { PARAMS.seed = (Math.random() * 1e9) | 0; regenerate(); syncPanel(); };
+  const btnCopy = document.createElement('button');
+  btnCopy.textContent = 'カット URL コピー';
+  btnCopy.onclick = () => {
+    history.replaceState(null, '', stateToHash());
+    navigator.clipboard?.writeText(location.href);
+    btnCopy.textContent = '✓ コピーした';
+    setTimeout(() => btnCopy.textContent = 'カット URL コピー', 1200);
+  };
+  btnrow.append(btnRegen, btnCopy);
+  // 時刻プリセット
+  const presetRow = document.createElement('div');
+  presetRow.className = 'btnrow';
+  for (const [label, h] of [['昼', 13], ['夕方', 17.7], ['夜', 21.5]]) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {
+      PARAMS.hour = h;
+      applyLive();
+      syncPanel();
+    };
+    presetRow.appendChild(b);
+  }
+  const seedCtrl = document.createElement('div');
+  seedCtrl.className = 'ctrl';
+  const seedLabel = document.createElement('label');
+  const seedName = document.createElement('span');
+  seedName.textContent = 'seed';
+  seedValEl = document.createElement('span');
+  seedValEl.className = 'val';
+  seedValEl.textContent = PARAMS.seed;
+  seedLabel.append(seedName, seedValEl);
+  seedCtrl.appendChild(seedLabel);
+  seedBody.append(btnrow, presetRow, seedCtrl);
+  seedSec.append(seedSum, seedBody);
+  panel.appendChild(seedSec);
+
+  for (const sec of SCHEMA) {
+    const det = document.createElement('details');
+    det.open = sec.open;
+    const sum = document.createElement('summary');
+    sum.textContent = sec.sec;
+    det.appendChild(sum);
+    const body = document.createElement('div');
+    body.className = 'sec-body';
+    for (const it of sec.items) body.appendChild(makeCtrl(it));
+    det.appendChild(body);
+    panel.appendChild(det);
+  }
+}
+
+function makeCtrl(it) {
+  const wrap = document.createElement('div');
+  if (it.type === 'check') {
+    wrap.className = 'ctrl chk';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = 'c_' + it.k;
+    input.checked = PARAMS[it.k];
+    input.disabled = !!it.disabled;
+    const label = document.createElement('label');
+    label.htmlFor = input.id;
+    label.textContent = it.label;
+    input.oninput = () => {
+      PARAMS[it.k] = input.checked;
+      it.regen ? scheduleRegen() : applyLive();
+    };
+    wrap.append(input, label);
+    ctrlRefs[it.k] = { input, it };
+    return wrap;
+  }
+  wrap.className = 'ctrl';
+  const label = document.createElement('label');
+  const name = document.createElement('span');
+  name.textContent = it.label;
+  const val = document.createElement('span');
+  val.className = 'val';
+  label.append(name, val);
+  wrap.appendChild(label);
+  let input;
+  if (it.type === 'select') {
+    input = document.createElement('select');
+    for (const [v, txt] of Object.entries(it.opts)) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = txt;
+      input.appendChild(o);
+    }
+    input.value = PARAMS[it.k];
+    input.oninput = () => {
+      const v = input.value;
+      PARAMS[it.k] = /^\d+(\.\d+)?$/.test(v) ? +v : v;   // 数値キー(倍率等)は数値化
+      updateVal();
+      it.regen ? scheduleRegen() : applyLive();
+    };
+  } else {
+    input = document.createElement('input');
+    input.type = 'range';
+    input.min = it.min; input.max = it.max; input.step = it.step;
+    input.value = PARAMS[it.k];
+    input.oninput = () => {
+      PARAMS[it.k] = parseFloat(input.value);
+      updateVal();
+      it.regen ? scheduleRegen() : applyLive();
+    };
+  }
+  input.disabled = !!it.disabled;
+  const updateVal = () => {
+    const v = PARAMS[it.k];
+    if (it.type === 'select') { val.textContent = ''; return; }
+    val.textContent = it.fmt ? it.fmt(v) : it.pct ? Math.round(v * 100) + '%' : v + (it.unit || '');
+  };
+  updateVal();
+  wrap.appendChild(input);
+  ctrlRefs[it.k] = { input, it, updateVal };
+  return wrap;
+}
+
+function syncPanel() {
+  if (seedValEl) seedValEl.textContent = PARAMS.seed;
+  for (const [k, ref] of Object.entries(ctrlRefs)) {
+    if (ref.it.type === 'check') ref.input.checked = PARAMS[k];
+    else { ref.input.value = PARAMS[k]; ref.updateVal?.(); }
+  }
+}
+let lastAspect = PARAMS.aspect;
+function applyLive() {
+  applyLight();
+  applyCamera();
+  if (PARAMS.aspect !== lastAspect) { lastAspect = PARAMS.aspect; resize(); }
+  else {
+    const cw = renderer.domElement.clientWidth, ch = renderer.domElement.clientHeight;
+    updateGuide(cw, ch, (stage.clientWidth - cw) / 2, (stage.clientHeight - ch) / 2);
+  }
+  if (PARAMS.mannequin && !mannequin.visible) {
+    mannequin.position.set(cam.pos.x - Math.sin(cam.yaw) * 5, 0, cam.pos.z - Math.cos(cam.yaw) * 5);
+    mannequin.rotation.y = cam.yaw;
+    mannequin.visible = true;
+  } else if (!PARAMS.mannequin) {
+    mannequin.visible = false;
+  }
+}
+
+/* --- モードバー --- */
+function buildModebar() {
+  modebar.replaceChildren();
+  for (const [m, txt] of [['clay', 'CLAY'], ['line', 'LINE'], ['tone', 'TONE']]) {
+    const b = document.createElement('button');
+    b.textContent = txt;
+    b.dataset.mode = m;
+    b.className = PARAMS.mode === m ? 'active' : '';
+    b.onclick = () => {
+      PARAMS.mode = m;
+      [...modebar.querySelectorAll('button[data-mode]')].forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    };
+    modebar.appendChild(b);
+  }
+  const sep = document.createElement('div');
+  sep.className = 'sep';
+  modebar.appendChild(sep);
+  const png1 = document.createElement('button');
+  png1.textContent = 'PNG ↓';
+  png1.title = '現在モードを書き出し';
+  png1.onclick = () => exportPNG([PARAMS.mode]);
+  const png3 = document.createElement('button');
+  png3.textContent = 'PNG ×3';
+  png3.title = 'CLAY/LINE/TONE を一括書き出し';
+  png3.onclick = () => exportPNG(['clay', 'line', 'tone']);
+  modebar.append(png1, png3);
+}
+
+/* --- HUD --- */
+function updateHudStatic() {
+  const l = city?.layout;
+  if (!l) return;
+  hudStat.textContent = `[${l.isArt ? '幹線' : '住宅街'}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
+}
+let fpsFrames = 0, fpsTime = 0, fpsNow = 0;
+function updateHud(dt) {
+  fpsFrames++; fpsTime += dt;
+  if (fpsTime >= 0.5) {
+    fpsNow = Math.round(fpsFrames / fpsTime);
+    fpsFrames = 0; fpsTime = 0;
+    const inf = renderer.info;
+    hudPerf.textContent = `${fpsNow}fps / draw ${inf.render.calls} / tri ${(inf.render.triangles / 1000).toFixed(0)}k` +
+      ` / geo ${inf.memory.geometries} tex ${inf.memory.textures}`;
+  }
+}
+
+/* ============================================================
+   リサイズ(コマ枠=キャンバス自体をそのアスペクトに)+ガイド
+============================================================ */
+function resize() {
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  let w = sw, h = sh;
+  if (PARAMS.aspect !== 'free') {
+    const [aw, ah] = PARAMS.aspect.split(':').map(Number);
+    const r = aw / ah;
+    if (sw / sh > r) { h = sh; w = Math.round(sh * r); }
+    else { w = sw; h = Math.round(sw / r); }
+  }
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  const oa = w / h, oz = 120;
+  orthoCam.left = -oz * oa; orthoCam.right = oz * oa;
+  orthoCam.top = oz; orthoCam.bottom = -oz;
+  orthoCam.updateProjectionMatrix();
+  updateGuide(w, h, (sw - w) / 2, (sh - h) / 2);
+}
+addEventListener('resize', resize);
+
+/* ガイド線(DOM/SVG なので書き出しに写らない) */
+const guideEl = document.getElementById('guide');
+function updateGuide(w, h, left, top) {
+  guideEl.style.display = PARAMS.guides ? 'block' : 'none';
+  if (!PARAMS.guides) return;
+  guideEl.style.left = left + 'px';
+  guideEl.style.top = top + 'px';
+  guideEl.setAttribute('width', w);
+  guideEl.setAttribute('height', h);
+  guideEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  guideEl.replaceChildren();
+  const mk = (x1, y1, x2, y2, op) => {
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+    l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+    l.setAttribute('stroke', '#7cf'); l.setAttribute('stroke-opacity', op);
+    l.setAttribute('stroke-width', '1');
+    guideEl.appendChild(l);
+  };
+  mk(w / 3, 0, w / 3, h, 0.4); mk(w * 2 / 3, 0, w * 2 / 3, h, 0.4);   // 三分割
+  mk(0, h / 3, w, h / 3, 0.4); mk(0, h * 2 / 3, w, h * 2 / 3, 0.4);
+  mk(0, 0, w, h, 0.22); mk(w, 0, 0, h, 0.22);                          // 対角(消失点)
+  mk(w / 2 - 12, h / 2, w / 2 + 12, h / 2, 0.6);                       // 中心十字
+  mk(w / 2, h / 2 - 12, w / 2, h / 2 + 12, 0.6);
+}
+
+/* マネキン(1.6m スケール確認用。トグル時にカメラ前方 5m へ固定配置) */
+const mannequin = new THREE.Group();
+{
+  const mMat = new THREE.MeshStandardMaterial({ color: 0xb85a72, roughness: 0.9 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 1.15, 10), mMat);
+  body.position.y = 0.88;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), mMat);
+  head.position.y = 1.48;
+  const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.06, 0.62, 8), mMat);
+  legL.position.set(0.09, 0.31, 0);
+  const legR = legL.clone();
+  legR.position.x = -0.09;
+  mannequin.add(body, head, legL, legR);
+  mannequin.traverse(o => { o.castShadow = true; });
+  mannequin.visible = false;
+}
+
+/* ============================================================
+   PNG 書き出し(書き出し直前に該当モードで render → toBlob)
+============================================================ */
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+}
+let exporting = false;
+async function exportPNG(modes) {
+  if (exporting) return;
+  exporting = true;
+  const cssW = renderer.domElement.clientWidth, cssH = renderer.domElement.clientHeight;
+  const pr = renderer.getPixelRatio();
+  try {
+    const scale = PARAMS.exportScale;
+    let ew = Math.round(cssW * scale), eh = Math.round(cssH * scale);
+    const mx = Math.max(ew, eh);
+    if (mx > 8192) { const k = 8192 / mx; ew = Math.round(ew * k); eh = Math.round(eh * k); }
+    renderer.setPixelRatio(1);
+    renderer.setSize(ew, eh, false);
+    exportPitchScale = ew / (cssW * pr);   // 網点ピッチを倍率追従
+    for (const m of modes) {
+      renderFrame(m, camera);
+      const blob = await new Promise(res => renderer.domElement.toBlob(res, 'image/png'));
+      if (blob) downloadBlob(blob, `street_${PARAMS.seed}_${m}.png`);
+    }
+  } finally {
+    // 例外時も表示状態を必ず復元し、書き出し解像度の RT は破棄する
+    exportPitchScale = 1;
+    renderer.setPixelRatio(pr);
+    renderer.setSize(cssW, cssH, false);
+    disposeRTs();
+    exporting = false;
+    renderFrame(PARAMS.mode, camera);
+  }
+}
+
+let lastT = performance.now();
+function tick(now) {
+  requestAnimationFrame(tick);
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  moveCamera(dt);
+  applyCamera();
+  updateShadowBox();
+  updateCrossing(dt);
+  const activeCam = topView ? orthoCam : camera;
+  renderFrame(PARAMS.mode, activeCam);
+  updateHud(dt);
+}
+
+/* ============================================================
+   boot
+============================================================ */
+parseHash();
+
+scene.add(skyDome);
+scene.add(mannequin);
+buildPanel();
+buildModebar();
+resize();
+applyLight();
+applyCamera();
+regenerate();
+requestAnimationFrame(tick);
+
+/* デバッグフック(Playwright 検証用) */
+window.__street = {
+  params: PARAMS,
+  set(k, v) { PARAMS[k] = v; applyLive(); },
+  regen(seed) { if (seed != null) PARAMS.seed = seed; regenerate(); syncPanel(); },
+  layout: () => city?.layout,
+  city: () => city,
+  scene, renderer,
+  info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
+                 geos: renderer.info.memory.geometries, tex: renderer.info.memory.textures, fps: fpsNow }),
+  cam,
+};
+</script>
+</body>
+</html>
