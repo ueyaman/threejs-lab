@@ -870,3 +870,15 @@
 - 書き出し中は tick のライブ描画を停止(await toBlob 中に rAF が canvas を汚す)。
 - depth 帯レイヤー分けは半開区間 [min,max) で欠落ゼロ。雨線など全画面エフェクトは near 層のみに
   入れないと重ね合成で二重になる。
+
+### makeRotationX の正回転はローカル +z 端を「下げる」(2026-07-12, #8)
+- Rx(θ) は y' = y·cosθ − z·sinθ / z' = y·sinθ + z·cosθ。+y に伸ばした棒を倒すとき
+  θ>0 で針先は +z 側へ、+z に伸ばした板は θ>0 で +z 端が**下がる**。すべり台の滑走面が
+  逆傾斜で空中に浮き、Playwright スクショで発覚。斜め box・時計の針は回転符号を目視必須。
+- 時計の針 10:10 は ±60°(±1.05rad)。裏面は `ang * nx` の鏡像で同時刻に見せる。
+
+### params 直叩き経路は UI/parseHash の検証をすり抜ける(Codex 検出, #8)
+- select と parseHash でホワイトリスト検証していても、`__street.params.landmark = 'typo'` や
+  未定義(旧形状の PARAMS)で genLayout に届くと `LM_W[undefined]` → NaN → クラッシュ。
+- 対策: 消費側(genLayout)でも `['shrine','school','park','random'].includes(v)` の
+  ホワイトリストで正規化してから分岐。入口と出口の二重検証。
