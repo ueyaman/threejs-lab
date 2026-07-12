@@ -914,3 +914,24 @@
 - 非破壊の復旧: ①`git branch <feat>`(現 HEAD に退避)②`git checkout <feat>`
   ③`git branch -f master <origin-master-sha>`(**非 current ブランチのポインタ移動は working
   tree を触らないので許可される**)。以後は通常の PR→squash マージ。commit はブランチに保全。
+
+### 建築様式パック方式で海外ロケーションを拡張(#11, 2026-07-12)
+- 新ロケーション = レイアウトパラメータ + 部品ビルダー + パレット + 看板アトラスのセット。
+  既存の box/cyl/blob/gableRoof/hipRoof/signPlane/frontWindow を最大限流用。
+- 乱数不変の鉄則を守るコツ: 間口 rr() は wa/wb レンジ変数で「常に 1 回」に統一、
+  kind 選択の r2()roll も 1 回に固定。oversKind は海外分岐でだけ kind 文字列を差し替える。
+  → 既存 6 ロケーションの指紋ハッシュが master と一致(回帰ゼロ)。
+- 看板アトラス追加は既存セルとの矩形重なりを必ず矩形交差判定で検証(Codex が
+  kow0-3 が aboard0/1 を上書きするのを検出=既存全ロケの置き看板が化ける重大バグ)。
+- 1F 店舗を持つ様式(欧州カフェ・九龍店先)は住居窓を 2F から始める(1F 重なり回避)。
+- ネオン発光は既存の窓点灯機構(W の kind)を拡張: kind:'neon'+neon:[r,g,b] を足し、
+  updateWindowLights に分岐(夜=自色×1.7 / 昼=×0.9)。G push は必ず box(gi*36 前提)。
+
+### 動的モブは静的マージの外に置く(#12, 2026-07-12)
+- 位置アニメする物(歩行者/自転車/猫)は街の静的マージに入れない。別 Group を毎フレーム
+  動かす。各体は matSolid 頂点色メッシュ(部品をマージ)=1 draw、L0 で線画に出る。
+- デフォルト密度 0 で「純粋な追加」にすれば既存の街・書き出し・指紋が完全に無改変。
+- ping-pong 位置アニメ+進行方向へ rotation.y。部品を +z 前で作ったら dir>0 で rotation=0
+  (Math.PI にすると後ろ向き=Codex 指摘)。歩行者は道路面内(|x|<edge0)に置く(建物めり込み回避)。
+- 「無人で書き出し」= 書き出し中だけ mobGroup.visible=false(finally で復元)。density は
+  カット URL にも保存。disposeMob で merged geometry を dispose(regen/密度変更でリーク無し)。
