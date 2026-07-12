@@ -148,6 +148,8 @@ const PARAMS = {
   exportAlpha: false,     // 透過 PNG(紙を抜く。LINE/TONE のみ)
   layerNear: 22,          // レイヤー分け書き出しの境界: 近|中(m)
   layerMid: 70,           //                             中|遠(m)
+  mobDensity: 0,          // #12 モブ密度 0(無人)〜1。位置アニメのみ・L0(線画に出る)
+  mobExportEmpty: true,   // PNG 書き出し時はモブを消す(無人プレート)
 };
 const ROAD_W = { local: 4.5, arterial: 13 };
 
@@ -3108,6 +3110,7 @@ function regenerate() {
   if (mannequin.visible) {   // 表示中にロケーション変更した場合、現在地形の高さへ載せ直す
     mannequin.position.y = city.layout.isHillside ? hillYAt(true, mannequin.position.z) : 0;
   }
+  buildMob(city.layout);     // #12 モブを新しい街に合わせて再配置
   history.replaceState(null, '', stateToHash());
   updateHudStatic();
   applyLight();   // 新 glassMesh の窓色を現在時刻に合わせる
@@ -3125,6 +3128,7 @@ function stateToHash() {
           `&mode=${PARAMS.mode}&ar=${encodeURIComponent(PARAMS.aspect)}`;
   if (PARAMS.rain > 0) h += `&rain=${PARAMS.rain}`;
   if (PARAMS.windowFrame) h += `&wf=1`;
+  if (PARAMS.mobDensity > 0) h += `&mob=${PARAMS.mobDensity}`;   // #12 モブありのカットを再現
   for (const k of GEN_KEYS) {
     if (PARAMS[k] !== GEN_DEFAULTS[k]) h += `&${k}=${encodeURIComponent(PARAMS[k])}`;
   }
@@ -3137,6 +3141,7 @@ function parseHash() {
   if (q.get('s')) PARAMS.seed = parseInt(q.get('s')) || PARAMS.seed;
   if (q.get('t')) PARAMS.hour = clamp(parseFloat(q.get('t')) || 13, 4, 24);
   if (q.get('rain')) PARAMS.rain = clamp(parseFloat(q.get('rain')) || 0, 0, 1);
+  if (q.get('mob')) PARAMS.mobDensity = clamp(parseFloat(q.get('mob')) || 0, 0, 1);
   if (q.get('wf') === '1') PARAMS.windowFrame = true;
   if (q.get('fov')) PARAMS.fov = clamp(parseFloat(q.get('fov')) || 48, 20, 100);
   if (q.get('roll')) PARAMS.roll = clamp(parseFloat(q.get('roll')) || 0, -15, 15);
@@ -3451,6 +3456,8 @@ const SCHEMA = [
       opts: { free: '自由', '4:3': '4:3', '16:9': '16:9', '2:1': '2:1(ワイド)', '3:4': '3:4(縦)' } },
     { k: 'guides', label: 'ガイド線', type: 'check' },
     { k: 'mannequin', label: 'マネキン(1.6m)', type: 'check' },
+    { k: 'mobDensity', label: 'モブ(人/自転車/猫)', type: 'range', min: 0, max: 1, step: 0.05, pct: true },
+    { k: 'mobExportEmpty', label: '無人で書き出し', type: 'check' },
     { k: 'exportScale', label: 'PNG 倍率', type: 'select', opts: { 1: '1x', 2: '2x', 4: '4x' } },
     { k: 'exportAlpha', label: '透過 PNG(紙を抜く)', type: 'check' },
     { k: 'layerNear', label: 'レイヤー境界 近|中', type: 'range', min: 5, max: 60, step: 1, unit: 'm' },
@@ -3648,6 +3655,7 @@ function applyLive() {
   } else if (!PARAMS.mannequin) {
     mannequin.visible = false;
   }
+  if (mobKey() !== lastMobKey) buildMob(city?.layout);   // #12 密度変更時だけモブを再構築
 }
 
 /* --- モードバー --- */
@@ -3811,6 +3819,105 @@ const mannequin = new THREE.Group();
 }
 
 /* ============================================================
+   #12 モブ(粘土人形/自転車/猫)— 位置アニメのみ・L0(線画に出る)
+   静的マージには入れず、動的 mobGroup を毎フレーム動かす。密度 0=無人(既定)
+============================================================ */
+const mobGroup = new THREE.Group();
+let mobs = [], lastMobKey = null;
+const SKIN = [0xcaa38a, 0xe0c0a4, 0xb98a68, 0xd8b090];
+const CLOTH = [0x3a4a6a, 0x8a3a30, 0x2e5a44, 0x4a4650, 0x6a5a3e, 0xb0b4b8, 0x7a3a58, 0x2e3e52];
+
+function mergeMob(list) {
+  const g = mergeGeometries(list, false);
+  g.computeBoundingSphere();
+  return new THREE.Mesh(g, matSolid);
+}
+function pedestrianGeo(rng) {                    // 原点=足元・高さ ~1.65m
+  const parts = [];
+  const skin = pick(rng, SKIN), top = pick(rng, CLOTH), bot = pick(rng, CLOTH);
+  const scale = rr(rng, 0.92, 1.08);
+  cyl(parts, 0.09, 0.32 * scale, 0, 0.065, 0.62 * scale, bot);    // 脚 L
+  cyl(parts, -0.09, 0.32 * scale, 0, 0.065, 0.62 * scale, bot);   // 脚 R
+  box(parts, 0, (0.66 + 0.5) * scale, 0, 0.34, 0.56 * scale, 0.22, top);  // 胴
+  for (const s of [1, -1]) cyl(parts, s * 0.22, 0.98 * scale, 0, 0.05, 0.5 * scale, top);  // 腕
+  blob(parts, 0, (1.28 + 0.14) * scale, 0, 0.15, skin);          // 頭
+  if (rng() < 0.35) blob(parts, 0, (1.44) * scale, 0, 0.17, pick(rng, [0x2e2a26, 0x4a3a2e, 0x6a5a4a]));  // 髪/帽子
+  return mergeMob(parts);
+}
+function bikeGeo(rng) {                           // 原点=接地・進行 +z 向き
+  const parts = [];
+  clayBike(parts, 0, 0, 0);                        // 既存の粘土自転車(origin)
+  const skin = pick(rng, SKIN), top = pick(rng, CLOTH);
+  cyl(parts, 0, 0.95, -0.05, 0.06, 0.5, pick(rng, CLOTH));       // 乗員の脚
+  box(parts, 0, 1.28, -0.05, 0.3, 0.5, 0.22, top);              // 胴
+  blob(parts, 0, 1.62, -0.05, 0.14, skin);                      // 頭
+  return mergeMob(parts);
+}
+function catGeo(rng) {                             // 原点=接地・高さ ~0.35m
+  const parts = [];
+  const c = pick(rng, [0x2e2a28, 0xc9a86a, 0xe8e4dc, 0x8a7a68, 0x4a4642]);
+  box(parts, 0, 0.2, 0, 0.5, 0.18, 0.2, c);                      // 胴
+  box(parts, 0, 0.26, 0.28, 0.18, 0.18, 0.16, c);               // 頭
+  for (const dz of [0.18, -0.18]) for (const dx of [0.07, -0.07]) cyl(parts, dx, 0.09, dz, 0.03, 0.18, c);  // 脚
+  cyl(parts, 0, 0.28, -0.32, 0.025, 0.34, c);                    // 尾(斜めは省略)
+  return mergeMob(parts);
+}
+
+function disposeMob() {
+  for (const m of mobs) { mobGroup.remove(m.mesh); m.mesh.geometry.dispose(); }
+  mobs = [];
+}
+function buildMob(layout) {
+  disposeMob();
+  lastMobKey = mobKey();
+  const d = PARAMS.mobDensity;
+  if (d <= 0 || !layout) return;
+  const rng = mulberry32(hash2(layout.seed, 24680));
+  const { roadW } = layout;
+  const sides = layout.isSeaside ? [-1] : [1, -1];
+  const N = Math.round(d * 22);                   // 最大 22 体
+  for (let i = 0; i < N; i++) {
+    const roll = rng();
+    const side = pick(rng, sides);
+    if (roll < 0.62) {                            // 歩行者(路肩を z 方向に往復。道路面内=建物にめり込まない)
+      const mesh = pedestrianGeo(rng);
+      const zc = rr(rng, -L / 2 + 15, L / 2 - 15), span = rr(rng, 10, 26);
+      const walkX = layout.sidewalkW > 0 ? roadW / 2 + 0.65 + rr(rng, 0.4, layout.sidewalkW - 0.3)  // 幹線=歩道
+                                         : roadW / 2 - rr(rng, 0.4, 1.1);                            // 生活道路=路肩
+      mobs.push({ mesh, kind: 'ped', axis: 'z', fixed: side * walkX,
+        a: zc - span / 2, b: zc + span / 2, p: rng(), spd: rr(rng, 0.9, 1.5), dir: rng() < 0.5 ? 1 : -1, ph: rng() * 6.28 });
+      mobGroup.add(mesh);
+    } else if (roll < 0.85) {                     // 自転車(路肩を z 方向に速く)
+      const mesh = bikeGeo(rng);
+      mobs.push({ mesh, kind: 'bike', axis: 'z', fixed: side * (roadW / 2 - 0.5),
+        a: -L / 2 + 6, b: L / 2 - 6, p: rng(), spd: rr(rng, 3.2, 5.0), dir: rng() < 0.5 ? 1 : -1, ph: 0 });
+      mobGroup.add(mesh);
+    } else {                                      // 猫(道路を x 方向に横断)
+      const mesh = catGeo(rng);
+      mobs.push({ mesh, kind: 'cat', axis: 'x', fixed: rr(rng, -L / 2 + 12, L / 2 - 12),
+        a: -roadW / 2 - 1, b: roadW / 2 + 1, p: rng(), spd: rr(rng, 0.8, 1.6), dir: rng() < 0.5 ? 1 : -1, ph: rng() * 6.28 });
+      mobGroup.add(mesh);
+    }
+  }
+}
+function updateMob(dt) {
+  if (!mobs.length) return;
+  const isH = city?.layout?.isHillside;
+  for (const m of mobs) {
+    const len = m.b - m.a;
+    m.p += (m.spd / Math.max(0.5, len)) * dt * m.dir;
+    if (m.p > 1) { m.p = 1; m.dir = -1; } else if (m.p < 0) { m.p = 0; m.dir = 1; }
+    const u = m.a + len * m.p;
+    let x, z;
+    if (m.axis === 'z') { x = m.fixed; z = u; m.mesh.rotation.y = m.dir > 0 ? 0 : Math.PI; }   // 部品は +z 前
+    else { x = u; z = m.fixed; m.mesh.rotation.y = m.dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
+    const bob = m.kind === 'ped' ? Math.abs(Math.sin(m.p * len * 3 + m.ph)) * 0.04 : 0;   // 歩行のボビング
+    m.mesh.position.set(x, (isH ? hillYAt(true, z) : 0) + bob, z);
+  }
+}
+function mobKey() { return PARAMS.mobDensity; }
+
+/* ============================================================
    PNG 書き出し(書き出し直前に該当モードで render → toBlob)
 ============================================================ */
 function downloadBlob(blob, name) {
@@ -3827,6 +3934,8 @@ async function exportJobs(jobs) {
   exporting = true;
   const cssW = renderer.domElement.clientWidth, cssH = renderer.domElement.clientHeight;
   const pr = renderer.getPixelRatio();
+  const mobWas = mobGroup.visible;
+  if (PARAMS.mobExportEmpty) mobGroup.visible = false;   // #12 無人プレートで書き出し
   try {
     const scale = PARAMS.exportScale;
     let ew = Math.round(cssW * scale), eh = Math.round(cssH * scale);
@@ -3852,6 +3961,7 @@ async function exportJobs(jobs) {
     renderer.setPixelRatio(pr);
     renderer.setSize(cssW, cssH, false);
     disposeRTs();
+    mobGroup.visible = mobWas;
     exporting = false;
     renderFrame(PARAMS.mode, camera);
   }
@@ -3889,6 +3999,7 @@ function tick(now) {
   updateCrossing(dt);
   updateRain(dt);
   updatePetals(dt);
+  updateMob(dt);
   const activeCam = topView ? orthoCam : camera;
   renderFrame(PARAMS.mode, activeCam);
   updateHud(dt);
@@ -3901,6 +4012,7 @@ parseHash();
 
 scene.add(skyDome);
 scene.add(mannequin);
+scene.add(mobGroup);
 scene.add(rainFx.mesh);
 scene.add(petalFx.mesh);
 scene.add(camera);        // カメラの子(窓越しフレーム)を描画可能に
