@@ -121,6 +121,7 @@ const PARAMS = {
   location: 'residential',  // residential=住宅街 / shotengai=商店街
   shutterRatio: 0.25,       // 商店街のシャッター店比率(1=シャッター街)
   season: 'none',           // none / sakura(桜) / autumn(紅葉) / snow(雪)
+  landmark: 'none',         // none / shrine(神社) / school(学校) / park(公園) / random
   roadType: 'local',      // local=4.5m / arterial=13m
   sideRoadEvery: 55,      // 側道間隔(m)
   setback: 1.2,           // 道路際余白(m)
@@ -349,6 +350,7 @@ function hipRoof(list, cx, cy, cz, w, l, h, hex) {
 /* ============================================================
    レイアウトエンジン — メッシュを作らない純データ
 ============================================================ */
+const LM_W = { shrine: 15, school: 26, park: 14 };   // ランドマークの必要間口(m)
 function genLayout(P) {
   const seed = P.seed | 0;
   const rng = mulberry32(seed);
@@ -423,6 +425,40 @@ function genLayout(P) {
     }
   }
 
+  // --- ランドマーク区画(#8): 生成済み row0 の隣接区画を束ねて 1 区画に置換。
+  //     選定は独立 rng — 'none' のとき一切走らず、既存の乱数列・区画を変えない ---
+  let landmark = null;
+  if (['shrine', 'school', 'park', 'random'].includes(P.landmark)) {   // 未知値・未定義は none 扱い
+    const rngLm = mulberry32(hash2(seed, 8888));
+    const type = P.landmark === 'random' ? pick(rngLm, ['shrine', 'school', 'park']) : P.landmark;
+    const need = LM_W[type];
+    // row0 を側ごとに連続ラン(隙間 <2.5m。側道・踏切帯で切れる)へ分解
+    // ※plots は side×row ごとに z 昇順で生成済みなので filter だけでソート済み
+    const runs = [];
+    for (const side of (isSeaside ? [-1] : [1, -1])) {
+      let cur = null;
+      for (const p of plots.filter(p2 => p2.side === side && p2.row === 0)) {
+        if (cur && p.z0 - cur[cur.length - 1].z1 < 2.5) cur.push(p);
+        else runs.push(cur = [p]);
+      }
+    }
+    const spanOf = r => r[r.length - 1].z1 - r[0].z0;
+    const fits = runs.filter(r => spanOf(r) >= need);
+    // 間口を満たすランが無い狭い街でも消さない: 最長ランで妥協(seed 再生成で必ず確保)
+    const pool = fits.length ? fits : runs.length ? [runs.reduce((a, b) => spanOf(b) > spanOf(a) ? b : a)] : [];
+    if (pool.length) {
+      const run = pick(rngLm, pool);
+      const zA = run[0].z0 + rr(rngLm, 0, Math.max(0, spanOf(run) - need));   // ラン内の配置位置
+      const used = run.filter(p => p.z1 > zA + 0.01 && p.z0 < zA + need - 0.01);
+      const z0 = used[0].z0, z1 = used[used.length - 1].z1;
+      const side = used[0].side;
+      for (const p of used) plots.splice(plots.indexOf(p), 1);
+      landmark = { type, side, z0, z1 };
+      plots.push({ side, row: 0, z0, z1, xNear: edge0, depth: 16,
+                   sub: hash2(seed, 8889), kind: 'landmark', groundY: 0, lmType: type });
+    }
+  }
+
   // --- 電柱(片側・~26m 間隔。踏切近傍は避ける。海辺は陸側に建てる) ---
   const poles = [];
   const poleSide = isSeaside ? -1 : 1;
@@ -433,7 +469,7 @@ function genLayout(P) {
     poles.push({ x: poleX, z: pz, dir: poleDir });
   }
 
-  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide };
+  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide, landmark };
 }
 
 /* ============================================================
@@ -1641,6 +1677,7 @@ function buildPlot(plot, layout, S, G, W, SIGN, PADDY) {
   const cz = (z0 + z1) / 2;
 
   if (plot.kind === 'paddy') { buildPaddy(plot, rng, S, PADDY); return; }
+  if (plot.kind === 'landmark') { buildLandmark(plot, rng, S, G, W); return; }
 
   // 敷地面
   const cPlot = PARAMS.season === 'snow' ? 0xe3e6e9 : plot.kind === 'lot' ? PAL.gravel : PAL.concrete;
@@ -1913,6 +1950,296 @@ function buildPaddy(plot, rng, S, PADDY) {
   }
 }
 
+/* ============================================================
+   ランドマーク(#8: 神社・学校・公園) — どのロケーションにも 1 区画
+============================================================ */
+
+/* 時計(枠+文字盤+10:10 の針)。nxs=文字盤を張る法線方向(±x)の配列 */
+function clock(S, fx, fy, fz, r, nxs) {
+  cylX(S, fx, fy, fz, r + 0.06, 0.12, 0x3a3e44);              // 枠・裏板(軸=x)
+  for (const nx of nxs) {
+    cylX(S, fx + nx * 0.03, fy, fz, r, 0.08, 0xf2f1ec);       // 文字盤
+    for (const [len, ang] of [[r * 0.6, 1.05], [r * 0.42, -1.05]]) {   // 長針・短針(10:10)
+      const g = UNIT_BOX.clone();
+      g.applyMatrix4(new THREE.Matrix4().makeScale(0.045, len, 0.07));
+      g.translate(0, len / 2, 0);
+      g.applyMatrix4(new THREE.Matrix4().makeRotationX(ang * nx));   // 裏面は鏡像で同時刻
+      g.translate(fx + nx * 0.1, fy, fz);
+      S.push(colorize(g, 0x2e2e32));
+    }
+  }
+}
+
+function buildLandmark(plot, rng, S, G, W) {
+  if (plot.lmType === 'shrine') buildShrine(plot, rng, S);
+  else if (plot.lmType === 'school') buildSchool(plot, rng, S, G, W);
+  else buildPark(plot, rng, S);
+}
+
+/* --- 神社(鳥居・石段・玉垣・社・狛犬・石灯籠・鎮守の森) --- */
+function buildShrine(plot, rng, S) {
+  const { side, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const cz = (z0 + z1) / 2;
+  const X = d => side * (xNear + d);            // 敷地内の奥行 d(m) → world x
+  const SNOW = PARAMS.season === 'snow';
+  const VERM = 0xc23a2a, VERM_D = 0x8e2a1e;     // 朱・濃朱
+  const STONE = 0xd6d3ca;
+
+  // 敷地(玉砂利)+参道石畳(道路→社)
+  box(S, X(depth / 2), 0.015, cz, depth, 0.05, w, SNOW ? 0xe3e6e9 : PAL.gravel);
+  box(S, X(depth * 0.36), 0.05, cz, depth * 0.72, 0.06, 2.3, STONE);
+
+  // 玉垣(道路際の低い石柵。鳥居部は開口)
+  for (const [a, b] of [[z0 + 0.3, cz - 2.2], [cz + 2.2, z1 - 0.3]]) {
+    if (b - a < 0.6) continue;
+    const mz = (a + b) / 2, len = b - a;
+    box(S, X(0.25), 0.42, mz, 0.18, 0.84, len, STONE);
+    box(S, X(0.25), 0.9, mz, 0.26, 0.12, len, 0xc8c5bc);       // 笠石
+    for (let pz = a + 0.5; pz < b - 0.3; pz += 1.5) {
+      box(S, X(0.25), 1.04, pz, 0.16, 0.32, 0.24, STONE);      // 親柱
+    }
+  }
+
+  // 鳥居(参道の道路寄り): 2 柱+根巻き+貫+額束+島木+笠木
+  const tx = X(1.6), th = 3.3, tg = 2.7;        // 柱間 tg
+  for (const s2 of [-1, 1]) {
+    cyl(S, tx, th / 2, cz + s2 * tg / 2, 0.15, th, VERM);
+    cyl(S, tx, 0.16, cz + s2 * tg / 2, 0.22, 0.32, 0x8a8578);
+  }
+  box(S, tx, th - 0.78, cz, 0.18, 0.2, tg + 0.7, VERM);        // 貫
+  box(S, tx, th - 0.28, cz, 0.13, 0.44, 0.28, VERM);           // 額束
+  box(S, tx, th + 0.1, cz, 0.3, 0.24, tg + 1.1, VERM);         // 島木
+  box(S, tx, th + 0.38, cz, 0.42, 0.28, tg + 1.7, VERM_D);     // 笠木
+
+  // 狛犬(参道両脇・道路向きに前傾)
+  for (const s2 of [-1, 1]) {
+    const kz = cz + s2 * 1.9, kx = X(3.6);
+    box(S, kx, 0.35, kz, 0.7, 0.7, 0.7, STONE);
+    box(S, kx, 0.98, kz, 0.52, 0.56, 0.4, 0xc9c6bd);
+    blob(S, kx - side * 0.14, 1.42, kz, 0.42, 0xc9c6bd);
+  }
+
+  // 石灯籠 1 対(参道中程)
+  for (const s2 of [-1, 1]) {
+    const lz = cz + s2 * 1.8, lx = X(depth * 0.52);
+    box(S, lx, 0.15, lz, 0.6, 0.3, 0.6, STONE);
+    cyl(S, lx, 0.75, lz, 0.09, 0.9, STONE);
+    box(S, lx, 1.32, lz, 0.42, 0.24, 0.42, STONE);
+    box(S, lx, 1.62, lz, 0.34, 0.36, 0.34, 0xe4e1d8);          // 火袋
+    hipRoof(S, lx, 1.84, lz, 0.76, 0.76, 0.3, 0xb8b5ac);       // 笠
+  }
+
+  // 石段(2 段)→基壇→社殿(切妻・平入り)+木階+賽銭箱
+  const bxD = depth - 3.4;                       // 社の奥行位置
+  const bx = X(bxD);
+  box(S, X(bxD - 3.2), 0.09, cz, 0.6, 0.18, 3.4, STONE);
+  box(S, X(bxD - 2.8), 0.2, cz, 0.6, 0.4, 3.4, STONE);
+  box(S, bx, 0.3, cz, 4.8, 0.6, 5.4, 0xcac7be);                // 基壇
+  box(S, bx, 0.6 + 1.1, cz, 2.6, 2.2, 3.4, 0x7a5f48);          // 社殿(木造)
+  gableRoof(S, bx, 0.6 + 2.2, cz, 3.5, 4.5, 1.3, 0x4e4a44);    // 屋根(oversize)
+  box(S, bx, 0.6 + 3.55, cz, 0.26, 0.24, 4.6, 0x3e3a36);       // 棟木
+  box(S, X(bxD - 1.8), 0.48, cz, 0.9, 0.24, 1.5, 0x6e5844);    // 木階
+  box(S, X(bxD - 1.2), 0.95, cz, 0.55, 0.7, 0.95, 0x5e4a3a);   // 賽銭箱
+
+  // 鎮守の森(常緑。社殿と重なる株は間引く — rng は全消費してから skip)
+  const EVG = SNOW ? [0x647a62, 0x59705c] : [0x4a6248, 0x3f5840];
+  for (let i = 0; i < 6; i++) {
+    const fz = rr(rng, z0 + 1.4, z1 - 1.4);
+    const fd = rr(rng, depth * 0.45, depth - 0.9);
+    const fH = rr(rng, 3.2, 4.6);
+    const fs = rr(rng, 1.6, 2.3);
+    const fc = pick(rng, EVG);
+    if (Math.abs(fz - cz) < 3.2 && Math.abs(fd - bxD) < 3.6) continue;
+    cyl(S, X(fd), fH * 0.4, fz, 0.13, fH * 0.8, 0x5e4e40);
+    blob(S, X(fd), fH, fz, fs, fc);
+    blob(S, X(fd) + 0.5, fH - 0.6, fz + 0.4, fs * 0.62, fc);
+  }
+}
+
+/* --- 学校(3F 校舎+時計・校庭・フェンス・桜並木=#5 連携) --- */
+function buildSchool(plot, rng, S, G, W) {
+  const { side, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const cz = (z0 + z1) / 2;
+  const X = d => side * (xNear + d);
+  const out = -side;
+  const SNOW = PARAMS.season === 'snow';
+  const FENCE_C = 0x7f9188;                      // 緑系ネットフェンス
+
+  // 校庭(土)+白線+朝礼台
+  box(S, X(depth / 2), 0.012, cz, depth, 0.04, w, SNOW ? 0xe4e7e9 : 0xc9bfa4);
+  if (!SNOW) {
+    box(S, X(depth * 0.34), 0.035, cz, 0.14, 0.012, w * 0.5, 0xf0efe8);
+    box(S, X(depth * 0.34), 0.035, cz - w * 0.25, depth * 0.32, 0.012, 0.14, 0xf0efe8);
+  }
+  box(S, X(depth * 0.52), 0.3, cz + w * 0.2, 1.1, 0.6, 1.5, 0xb8bcc0);
+
+  // 校舎(奥・横長 3F・陸屋根)
+  const bd = 4.6;
+  const bxD = depth - bd / 2 - 0.4;
+  const bw = Math.min(w - 2.2, 24);
+  const fh = 3.1, H = 3 * fh;
+  const wall = 0xdad7ce;
+  const fx = X(bxD - bd / 2);                    // 前面(校庭側)壁
+  box(S, X(bxD), 0.25, cz, bd + 0.12, 0.5, bw + 0.12, 0x9b968e);
+  box(S, X(bxD), 0.5 + H / 2, cz, bd, H, bw, wall);
+  box(S, X(bxD), 0.5 + H + 0.25, cz, bd + 0.16, 0.5, bw + 0.16, shade(wall, 0.9));
+  box(S, X(bxD + 0.5), 0.5 + H + 0.9, cz - bw * 0.28, 2.4, 0.8, 3.0, 0xb4b8bc);   // 屋上機械室
+
+  // 窓(各階横連続。1F 中央は玄関)+玄関+庇
+  for (let f = 1; f <= 3; f++) {
+    const cy = 0.5 + (f - 1) * fh + 1.72;
+    for (let wz = cz - bw / 2 + 1.7; wz < cz + bw / 2 - 1.5; wz += 2.15) {
+      if (f === 1 && Math.abs(wz - cz) < 1.7) continue;
+      frontWindow(S, G, W, fx, cy, wz, 1.7, 1.3, out, rng);
+    }
+  }
+  box(S, fx + out * 0.06, 1.25, cz, 0.12, 2.5, 2.4, 0x8a857c);           // 玄関(両開き)
+  box(S, fx + out * 0.5, 2.66, cz, 1.0, 0.1, 3.0, shade(wall, 0.82));    // 庇
+
+  // 時計(最上部中央・校庭向き)+掲揚ポール
+  clock(S, fx + out * 0.08, 0.5 + H - 0.85, cz, 0.55, [out]);
+  cyl(S, X(bxD - bd / 2 - 2.4), 3.6, cz + bw / 2 - 1.2, 0.045, 7.2, 0xaab0b6);
+
+  // フェンス(道路際は正門開口・両側面)+門柱
+  const gz = cz;
+  for (const [a, b] of [[z0 + 0.15, gz - 1.9], [gz + 1.9, z1 - 0.15]]) {
+    const mz = (a + b) / 2, len = b - a;
+    box(S, X(0.25), 0.1, mz, 0.16, 0.2, len, 0xb0ada4);
+    for (const fy of [0.78, 1.48]) box(S, X(0.25), fy, mz, 0.05, 0.06, len, FENCE_C);
+    for (let pz = a + 0.7; pz < b - 0.4; pz += 2.0) {
+      box(S, X(0.25), 0.85, pz, 0.06, 1.54, 0.06, FENCE_C);
+    }
+  }
+  for (const zz of [z0 + 0.12, z1 - 0.12]) {
+    for (const fy of [0.78, 1.48]) box(S, X(depth * 0.5), fy, zz, depth - 1.2, 0.06, 0.05, FENCE_C);
+    for (let dd = 1.2; dd < depth - 0.8; dd += 2.2) {
+      box(S, X(dd), 0.85, zz, 0.06, 1.54, 0.06, FENCE_C);
+    }
+  }
+  for (const s2 of [-1, 1]) box(S, X(0.3), 0.8, gz + s2 * 1.9, 0.42, 1.6, 0.42, 0xc5c1b8);
+
+  // 桜並木(フェンス内側・道路寄り。#5 連携=seasonLeaf が季節色を返す)
+  const leafC = seasonLeaf();
+  for (let tz = z0 + 2.2; tz < z1 - 1.8; tz += 4.2) {
+    const tH = rr(rng, 2.6, 3.4);
+    const ts = rr(rng, 1.7, 2.3);
+    const c1 = pick(rng, leafC), c2 = pick(rng, leafC);
+    if (Math.abs(tz - gz) < 2.4) continue;       // 正門前は空ける(rng 消費済み)
+    cyl(S, X(1.7), tH * 0.5, tz, 0.13, tH, 0x6e5648);
+    blob(S, X(1.7), tH + 0.7, tz, ts, c1);
+    blob(S, X(1.7) + 0.5, tH + 0.2, tz + 0.4, ts * 0.62, c2);
+  }
+}
+
+/* --- 公園(すべり台・ブランコ・砂場・ベンチ・時計柱) --- */
+function buildPark(plot, rng, S) {
+  const { side, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const cz = (z0 + z1) / 2;
+  const X = d => side * (xNear + d);
+  const SNOW = PARAMS.season === 'snow';
+  const IRON = 0x6a8296;                         // 遊具フレーム(青緑)
+
+  // 敷地(土)+芝の一角
+  box(S, X(depth / 2), 0.012, cz, depth, 0.04, w, SNOW ? 0xe4e7e9 : 0xc4bda6);
+  box(S, X(depth * 0.7), 0.022, cz + w * 0.3, depth * 0.55, 0.045, w * 0.36, SNOW ? 0xdfe3e4 : 0x9cab7e);
+
+  // 低フェンス(道路際・入口開口)+車止めポール
+  const ez = cz - w * 0.18;
+  for (const [a, b] of [[z0 + 0.15, ez - 1.2], [ez + 1.2, z1 - 0.15]]) {
+    if (b - a < 0.5) continue;
+    const mz = (a + b) / 2, len = b - a;
+    for (const fy of [0.36, 0.72]) box(S, X(0.22), fy, mz, 0.05, 0.06, len, IRON);
+    for (let pz = a + 0.5; pz < b - 0.3; pz += 1.7) box(S, X(0.22), 0.4, pz, 0.07, 0.8, 0.07, IRON);
+  }
+  cyl(S, X(0.6), 0.35, ez, 0.06, 0.7, 0xc9c5bc);
+
+  // すべり台(階段+頂上台+滑走斜面。滑走方向=-z)
+  const slX = X(depth * 0.62), slZ = cz - w * 0.24, slH = 1.8;
+  const stepH = slH / 4;
+  for (let i = 0; i < 4; i++) {
+    const hh = (i + 1) * stepH;
+    box(S, slX, hh / 2, slZ + 1.35 - i * 0.34, 0.85, hh, 0.34, 0xc4c8cc);
+  }
+  box(S, slX, slH + 0.09, slZ - 0.15, 0.9, 0.18, 1.0, 0xc4c8cc);          // 頂上台
+  for (const s2 of [-1, 1]) {
+    box(S, slX + s2 * 0.42, slH + 0.5, slZ - 0.15, 0.05, 0.66, 1.0, IRON); // 手すり
+    box(S, slX + s2 * 0.38, slH / 2, slZ + 0.2, 0.07, slH, 0.07, IRON);    // 支柱
+  }
+  {
+    const len = 2.7, rise = slH - 0.28;
+    const ang = -Math.atan2(rise, len);      // Rx 負回転=+z 端(頂上台側)が上がる
+    const g = UNIT_BOX.clone();
+    g.applyMatrix4(new THREE.Matrix4().makeScale(0.8, 0.09, Math.hypot(len, rise) + 0.3));
+    g.applyMatrix4(new THREE.Matrix4().makeRotationX(ang));
+    g.translate(slX, (slH + 0.28) / 2 + 0.05, slZ - 0.65 - len / 2);
+    S.push(colorize(g, 0xd8dade));
+    for (const s2 of [-1, 1]) {                                            // 側板
+      const sg = UNIT_BOX.clone();
+      sg.applyMatrix4(new THREE.Matrix4().makeScale(0.05, 0.3, Math.hypot(len, rise)));
+      sg.applyMatrix4(new THREE.Matrix4().makeRotationX(ang));
+      sg.translate(slX + s2 * 0.4, (slH + 0.28) / 2 + 0.14, slZ - 0.65 - len / 2);
+      S.push(colorize(sg, IRON));
+    }
+  }
+
+  // ブランコ(A 脚=tube 斜め線+横バー+チェーン+座板 2)
+  const swX = X(depth * 0.35), swZ = cz + w * 0.22, swH = 2.2, swW = 2.8;
+  for (const s2 of [-1, 1]) {
+    const az = swZ + s2 * swW / 2;
+    for (const dx of [-0.75, 0.75]) {
+      tube(S, new THREE.LineCurve3(
+        new THREE.Vector3(swX + dx, 0.02, az + s2 * 0.2),
+        new THREE.Vector3(swX, swH, az)), 0.05, IRON, 2);
+    }
+  }
+  box(S, swX, swH, swZ, 0.09, 0.09, swW, IRON);
+  for (const dz of [-0.6, 0.6]) {
+    for (const dx of [-0.24, 0.24]) {
+      box(S, swX + dx, swH / 2 + 0.32, swZ + dz, 0.028, swH - 0.66, 0.028, 0x9aa0a6);
+    }
+    box(S, swX, 0.66, swZ + dz, 0.55, 0.06, 0.26, 0x8a5f3e);
+  }
+
+  // 砂場(枠 4 辺+砂)
+  const sbX = X(depth * 0.3), sbZ = cz - w * 0.3, sbS = 2.6;
+  for (const s2 of [-1, 1]) {
+    box(S, sbX + s2 * (sbS / 2 - 0.11), 0.1, sbZ, 0.22, 0.2, sbS, 0xcdc9c0);
+    box(S, sbX, 0.1, sbZ + s2 * (sbS / 2 - 0.11), sbS - 0.44, 0.2, 0.22, 0xcdc9c0);
+  }
+  box(S, sbX, 0.06, sbZ, sbS - 0.4, 0.14, sbS - 0.4, SNOW ? 0xe8eaec : 0xdccfa8);
+
+  // ベンチ 2 基(道路寄り・道路向き)
+  for (const bz of [cz + w * 0.38, cz - w * 0.38]) {
+    const bX = X(depth * 0.18);
+    box(S, bX, 0.42, bz, 0.44, 0.06, 1.5, 0x8a6a48);
+    box(S, bX + side * 0.19, 0.7, bz, 0.06, 0.6, 1.5, 0x8a6a48);
+    for (const dz of [-0.55, 0.55]) box(S, bX, 0.2, bz + dz, 0.38, 0.4, 0.08, 0x6a6e72);
+  }
+
+  // 時計柱(両面)
+  const ckX = X(depth * 0.42), ckZ = cz + w * 0.4;
+  cyl(S, ckX, 1.6, ckZ, 0.05, 3.2, 0x8a8e92);
+  clock(S, ckX, 3.4, ckZ, 0.32, [1, -1]);
+
+  // 木(季節連動)+低木
+  const leafC = seasonLeaf();
+  for (let i = 0; i < 2; i++) {
+    const tz = rr(rng, z0 + 1.6, z1 - 1.6);
+    const td = rr(rng, depth * 0.72, depth * 0.92);
+    const tH = rr(rng, 2.6, 3.4);
+    const ts = rr(rng, 1.8, 2.4);
+    const c1 = pick(rng, leafC);
+    cyl(S, X(td), tH * 0.5, tz, 0.12, tH, PAL.trunk);
+    blob(S, X(td), tH + 0.8, tz, ts, c1);
+  }
+  for (const dz of [w * 0.12, -w * 0.42]) {
+    blob(S, X(depth * 0.88), 0.42, cz + dz, 0.9, pick(rng, PAL.hedge));
+  }
+}
+
 /* --- 粘土自転車(商店街の店前) --- */
 function clayBike(S, cx, cz, ry) {
   const c = Math.cos(ry), s2 = Math.sin(ry);
@@ -2057,7 +2384,7 @@ function buildDebugLines(layout) {
   for (const p of layout.plots) {
     const xa = p.side * p.xNear, xb = p.side * (p.xNear + p.depth);
     rect(Math.min(xa, xb), p.z0, Math.max(xa, xb), p.z1,
-         p.kind === 'apt' ? 0x77ffcc : p.kind === 'lot' ? 0xffcc77 : 0x66dd66);
+         p.kind === 'landmark' ? 0xcc88ff : p.kind === 'apt' ? 0x77ffcc : p.kind === 'lot' ? 0xffcc77 : 0x66dd66);
   }
   rect(-layout.roadW / 2, -L / 2, layout.roadW / 2, L / 2, 0xffffff);
   const srX0 = -46, srX1 = layout.isSeaside ? layout.roadW / 2 : 45;
@@ -2087,7 +2414,7 @@ function regenerate() {
 }
 
 /* URL に「このカット」を保存(seed+時刻+カメラ+モード+コマ枠+街並みパラメータの差分) */
-const GEN_KEYS = ['location', 'shutterRatio', 'season', 'roadType', 'sideRoadEvery', 'setback',
+const GEN_KEYS = ['location', 'shutterRatio', 'season', 'landmark', 'roadType', 'sideRoadEvery', 'setback',
                   'houseGap', 'garageRatio', 'aptRatio', 'wires', 'signs', 'crossing', 'mountains'];
 const GEN_DEFAULTS = Object.fromEntries(GEN_KEYS.map(k => [k, PARAMS[k]]));
 const AR_OK = ['free', '4:3', '16:9', '2:1', '3:4'];
@@ -2125,6 +2452,7 @@ function parseHash() {
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
     else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural'].includes(v)) PARAMS[k] = v;
     else if (k === 'season' && ['none', 'sakura', 'autumn', 'snow'].includes(v)) PARAMS[k] = v;
+    else if (k === 'landmark' && ['none', 'shrine', 'school', 'park', 'random'].includes(v)) PARAMS[k] = v;
   }
   const cs = q.get('cam');
   if (cs) {
@@ -2382,6 +2710,7 @@ const SCHEMA = [
     { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道' }, regen: true },
     { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
     { k: 'season', label: '季節', type: 'select', opts: { none: '通常', sakura: '桜', autumn: '紅葉', snow: '雪' }, regen: true },
+    { k: 'landmark', label: 'ランドマーク', type: 'select', opts: { none: 'なし', shrine: '神社', school: '学校', park: '公園', random: 'ランダム' }, regen: true },
     { k: 'roadType', label: '道路タイプ', type: 'select', opts: { local: '生活道路 4.5m', arterial: '幹線 13m' }, regen: true },
     { k: 'sideRoadEvery', label: '側道間隔', type: 'range', min: 35, max: 120, step: 5, unit: 'm', regen: true },
     { k: 'setback', label: '道路際余白', type: 'range', min: 0, max: 3, step: 0.1, unit: 'm', regen: true },
