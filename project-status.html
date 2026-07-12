@@ -281,7 +281,7 @@
     <!-- ===== STATUS BANNER ===== -->
     <div class="banner">
       <span class="tag">Active</span>
-      <span><b>実験 7 件</b>。01–05 + 07 は Vercel 公開済み。最新作 <b style="color:var(--amber)">07「Manga Street」— 拡張 issue #1〜#9 完了（P1・P2 コンプ+P3 の 1/4）。次は #10 坂の住宅街</b>。<br><span style="color:var(--muted)">2026-07-12 更新: #8 ランドマーク（PR #21）に続き #9 駅前（PR #22）をマージ。<b style="color:var(--text)">ロケーション 5 種（住宅街/商店街/海辺の道/田舎道/駅前）× 季節 4 種 × ランドマーク 3 種（神社/学校/公園）× 雨 × 時刻 4-24h × 3 レンダモード</b>+電車の駅停車ループ+透過線画 PNG・レイヤー分け書き出し・構図補助。残 issue: #10-#12（P3: 坂/海外ロケ/モブ）。06「猫の骨格」は Cascadeur 物理クリーンアップ待ちで棚上げ継続（<code>docs/260618/STATUS.md</code>）。</span></span>
+      <span><b>実験 7 件</b>。01–05 + 07 は Vercel 公開済み。最新作 <b style="color:var(--amber)">07「Manga Street」— 拡張 issue #1〜#10 完了（P1・P2 コンプ+P3 の 2/4）。次は #11 海外ロケ</b>。<br><span style="color:var(--muted)">2026-07-12 更新: #9 駅前（PR #22）に続き #10 坂の街（PR #23）をマージ＝レイアウトエンジンの 2.5D 化。<b style="color:var(--text)">ロケーション 6 種（住宅街/商店街/海辺の道/田舎道/駅前/坂の街）× 季節 4 種 × ランドマーク 3 種 × 雨 × 時刻 4-24h × 3 レンダモード</b>+電車の駅停車ループ+段状テラス地形（尾道/長崎風・階段路地）+透過線画 PNG・レイヤー分け書き出し・構図補助。残 issue: #11-#12（P3: 海外ロケ/モブ）。06「猫の骨格」は Cascadeur 物理クリーンアップ待ちで棚上げ継続（<code>docs/260618/STATUS.md</code>）。</span></span>
     </div>
 
     <!-- ===== METRICS ===== -->
@@ -291,7 +291,7 @@
         <div class="metric"><div class="val accent">7</div><div class="lbl">実験（6 公開 + 1 Cascadeur 調整中）</div></div>
         <div class="metric"><div class="val green">6</div><div class="lbl">公開中（Vercel / 01–05・07）</div></div>
         <div class="metric"><div class="val amber">1</div><div class="lbl">調整中（06・Cascadeur 課金ゲート待ち）</div></div>
-        <div class="metric"><div class="val">23</div><div class="lbl">Git コミット（最終 07-12 / 07 拡張 #9 駅前）</div></div>
+        <div class="metric"><div class="val">25</div><div class="lbl">Git コミット（最終 07-12 / 07 拡張 #10 坂の街）</div></div>
       </div>
       <div class="bars">
         <div class="bar-row">
@@ -348,8 +348,8 @@
         <div class="tl-item now">
           <span class="dot"></span>
           <div class="tl-date">2026-07-10 〜 07-12 ・ <b style="color:var(--amber)">現在地</b></div>
-          <div class="tl-title">07 Manga Street <span class="chip pub">公開+拡張 #1〜#9（P1・P2 完了+P3 着手）</span></div>
-          <div class="tl-desc">日本の住宅街をプロシージャル生成し、漫画背景用に線画・トーン出力する Web アプリ（山田胡瓜氏の同種アプリに触発）。seed 街生成＋時刻 4-24h＋<b>CLAY / LINE / TONE の 3 レンダモード</b>（照明不変エッジ検出・45° 網点）＋踏切＋コマ枠＋PNG 書き出し＋カット URL 保存。<b>拡張 issue #1〜#9 を消化</b>: 透過線画 PNG＋近/中/遠レイヤー分け(#1)・雨モード(#2)・構図補助(#3)・<b>ロケーション基盤＋商店街</b>(#4)・<b>季節</b>=桜/紅葉/雪(#5)・<b>海辺の道</b>(#6)・<b>田舎道</b>(#7)・<b>ランドマーク</b>=神社/学校/公園(#8)・<b>駅前</b>=かすみ台駅（単式ホーム/駅舎/跨線橋/ロータリー）＋電車の停車→発車ループ(#9, 07-12)。全件 Bedrock-Codex レビュー→修正→PR→マージ→Vercel 反映。<b>次=#10 坂の住宅街（尾道風）→ #11 海外ロケ → #12 モブ</b>。</div>
+          <div class="tl-title">07 Manga Street <span class="chip pub">公開+拡張 #1〜#10（P1・P2 完了+P3 2/4）</span></div>
+          <div class="tl-desc">日本の住宅街をプロシージャル生成し、漫画背景用に線画・トーン出力する Web アプリ（山田胡瓜氏の同種アプリに触発）。seed 街生成＋時刻 4-24h＋<b>CLAY / LINE / TONE の 3 レンダモード</b>（照明不変エッジ検出・45° 網点）＋踏切＋コマ枠＋PNG 書き出し＋カット URL 保存。<b>拡張 issue #1〜#10 を消化</b>: 透過線画/レイヤー分け(#1)・雨(#2)・構図補助(#3)・<b>ロケーション基盤＋商店街</b>(#4)・<b>季節</b>(#5)・<b>海辺の道</b>(#6)・<b>田舎道</b>(#7)・<b>ランドマーク</b>=神社/学校/公園(#8)・<b>駅前</b>=かすみ台駅＋電車停車ループ(#9)・<b>坂の街</b>=尾道/長崎風の段状テラス地形＋階段路地＋擁壁（レイアウトエンジンの 2.5D 化・地物と影が勾配追従）(#10, 07-12)。全件 Bedrock-Codex レビュー→修正→PR→マージ→Vercel 反映。<b>次=#11 海外ロケ → #12 モブ</b>。</div>
         </div>
       </div>
     </section>
@@ -427,7 +427,7 @@
             <tr>
               <td class="exp-id">07</td>
               <td class="exp-file"><a href="07-manga-street.html">07-manga-street.html</a></td>
-              <td>漫画の街 — 日本の街並みを seed 生成し、CLAY / LINE（照明不変の 3 項エッジ検出線画）/ TONE（45° 網点）で漫画背景として PNG 書き出し。<b>ロケーション 5 種</b>（住宅街・商店街・海辺の道・田舎道・駅前）×<b>季節 4 種</b>（桜・紅葉・雪）×<b>ランドマーク 3 種</b>（神社・学校・公園）× 雨 × 時刻 4-24h。電車の駅停車ループ・透過線画・レイヤー分け書き出し・構図補助・踏切・カット URL 保存。拡張 issue #1〜#9 済み（P1・P2 完了+P3 着手）/ 残り #10〜#12（P3: 坂・海外ロケ・モブ）</td>
+              <td>漫画の街 — 日本の街並みを seed 生成し、CLAY / LINE（照明不変の 3 項エッジ検出線画）/ TONE（45° 網点）で漫画背景として PNG 書き出し。<b>ロケーション 6 種</b>（住宅街・商店街・海辺の道・田舎道・駅前・坂の街）×<b>季節 4 種</b>（桜・紅葉・雪）×<b>ランドマーク 3 種</b>（神社・学校・公園）× 雨 × 時刻 4-24h。段状テラス地形（尾道/長崎風・階段路地）・電車の駅停車ループ・透過線画・レイヤー分け書き出し・構図補助・踏切・カット URL 保存。拡張 issue #1〜#10 済み（P1・P2 完了+P3 2/4）/ 残り #11〜#12（P3: 海外ロケ・モブ）</td>
               <td><span class="status pub"><span class="led"></span>公開中</span></td>
             </tr>
           </tbody>
@@ -531,7 +531,7 @@
         </li>
         <li>
           <span class="box checked"></span>
-          <span class="txt">07 次の実験テーマを決めて追加<small>✅ 2026-07-10「Manga Street」として実装・公開。拡張 #1〜#9 完了（ロケーション 5 種・季節・雨・構図補助・レイヤー書き出し・ランドマーク・駅前+電車停車=07-12）。<b>次=#10 坂の住宅街(尾道風) → #11 海外ロケ → #12 モブ</b>。issue に受け入れ条件・依存関係を記載済み。</small></span>
+          <span class="txt">07 次の実験テーマを決めて追加<small>✅ 2026-07-10「Manga Street」として実装・公開。拡張 #1〜#10 完了（ロケーション 6 種・季節・雨・構図補助・レイヤー書き出し・ランドマーク・駅前+電車停車・坂の街 2.5D 化=07-12）。<b>次=#11 海外ロケ → #12 モブ</b>。issue に受け入れ条件・依存関係を記載済み。</small></span>
         </li>
       </ul>
     </section>
@@ -558,7 +558,7 @@
 
     <footer>
       <span>Three.js Lab — Project Status Report</span>
-      <span>更新: 2026-07-12（07 拡張 #1〜#9 完了=P1・P2 コンプ+P3 着手。次=#10 坂(尾道風)→#11 海外ロケ→#12 モブ。06 は Cascadeur 物理クリーンアップ待ち: 次=Fulcrum→Unbaking→AutoPhysics→FBX(Indie $8/月)→GLB→Web）</span>
+      <span>更新: 2026-07-12（07 拡張 #1〜#10 完了=P1・P2 コンプ+P3 2/4。次=#11 海外ロケ→#12 モブ。06 は Cascadeur 物理クリーンアップ待ち: 次=Fulcrum→Unbaking→AutoPhysics→FBX(Indie $8/月)→GLB→Web）</span>
     </footer>
   </div>
 
