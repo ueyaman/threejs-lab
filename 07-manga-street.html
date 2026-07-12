@@ -118,7 +118,7 @@ const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
 ============================================================ */
 const PARAMS = {
   seed: 20260710,
-  location: 'residential',  // residential=住宅街 / shotengai=商店街 / seaside=海辺 / rural=田舎 / station=駅前
+  location: 'residential',  // JP: residential/shotengai/seaside/rural/station/hillside | 海外: euro/suburbia/kowloon
   shutterRatio: 0.25,       // 商店街のシャッター店比率(1=シャッター街)
   season: 'none',           // none / sakura(桜) / autumn(紅葉) / snow(雪)
   landmark: 'none',         // none / shrine(神社) / school(学校) / park(公園) / random
@@ -414,16 +414,25 @@ function genLayout(P) {
   // --- 区画(row0=道路沿い / row1=2列目簡易。海辺は +x 側が海=陸側のみ) ---
   const plots = [];
   let plotIndex = 0;
+  const isEuro = P.location === 'euro', isSub = P.location === 'suburbia', isKow = P.location === 'kowloon';
+  const oversKind = isEuro ? 'euro' : isSub ? 'suburb' : isKow ? 'kowloon' : null;   // 海外様式パック
   for (const side of (isSeaside ? [-1] : [1, -1])) {
     for (const row of [0, 1]) {
       const isShotengai = P.location === 'shotengai';
       const isRural = P.location === 'rural';
       const xNear = edge0 + (row === 0 ? 0 : 17.5);
-      const depth = row === 0 ? rr(rng, 13, 16) * (isRural ? 1.35 : 1) : (isRural ? 17 : 12);
+      const depthK = isRural ? 1.35 : isSub ? 1.3 : isEuro ? 1.1 : 1;   // 米郊外=前庭で深い
+      const depth = row === 0 ? rr(rng, 13, 16) * depthK : (isRural ? 17 : isSub ? 16 : 12);
       let pz = -L / 2 + 1.5;
       while (pz < L / 2 - 9) {
-        // 商店街=狭い間口 / 田舎=広い田区画(rr は 1 回消費=residential の乱数列を変えない)
-        const w = (isShotengai && row === 0) ? rr(rng, 5, 8.5) : isRural ? rr(rng, 12, 19) : rr(rng, 8, 12.5);
+        // 間口レンジは様式で可変だが rr の消費は常に 1 回=既存ロケーションの乱数列を変えない
+        let wa = 8, wb = 12.5;
+        if (isShotengai && row === 0) { wa = 5; wb = 8.5; }
+        else if (isRural) { wa = 12; wb = 19; }
+        else if (isSub && row === 0) { wa = 13; wb = 18; }        // 郊外=広い間口
+        else if (isEuro && row === 0) { wa = 6; wb = 9.5; }       // 連棟組積造=狭め
+        else if (isKow && row === 0) { wa = 5; wb = 8; }          // 密集=狭い
+        const w = rr(rng, wa, wb);
         const hit = bands.find(b => pz < b.z1 && pz + w > b.z0);
         if (hit) { pz = hit.z1 + 0.4; continue; }
         if (pz + w > L / 2 - 1) break;
@@ -438,12 +447,16 @@ function genLayout(P) {
             else kind = 'shop';
           } else if (isRural) {
             kind = roll < 0.18 ? 'house' : 'paddy';
+          } else if (oversKind) {
+            kind = (isSub && roll < 0.06) ? 'lot' : oversKind;   // 郊外はたまに空き地(roll 消費は JP と同数)
           } else {
             if (roll < P.aptRatio) kind = 'apt';
             else if (roll < P.aptRatio + 0.05) kind = 'lot';
           }
         } else if (isRural) {
           kind = r2() < 0.14 ? 'house' : 'paddy';   // 2 列目も田主体(r2 は区画個別なので他に波及しない)
+        } else if (oversKind) {
+          kind = oversKind;   // 2 列目も様式(r2 消費なし=JP 非田舎と同じ)
         }
         plots.push({ side, row, z0: pz, z1: pz + w, xNear, depth, sub, kind, groundY: hillYAt(isHillside, pz + w) });
         pz += w + rr(rng, 0.1, 0.7);
@@ -510,18 +523,21 @@ function genLayout(P) {
     }
   }
 
-  // --- 電柱(片側・~26m 間隔。踏切近傍は避ける。海辺は陸側に建てる) ---
+  // --- 電柱(片側・~26m 間隔。踏切近傍は避ける。海辺は陸側に建てる。欧州は地中化=無し) ---
   const poles = [];
   const poleSide = isSeaside ? -1 : 1;
   const poleX = poleSide * (roadW / 2 + 0.35 + sidewalkW);
   const poleDir = -poleSide;   // 電柱付属物(防犯灯・自販機など)の道路向き
-  for (let pz = -L / 2 + rr(rng, 4, 10); pz < L / 2 - 4; pz += rr(rng, 24, 30)) {
-    if (railway && Math.abs(pz - railway.z) < 7) continue;
-    if (station && pz > station.z0 && pz < station.z1) continue;   // 駅前広場は無電柱
-    poles.push({ x: poleX, z: pz, dir: poleDir, y: hillYAt(isHillside, pz) });
+  if (!isEuro) {
+    for (let pz = -L / 2 + rr(rng, 4, 10); pz < L / 2 - 4; pz += rr(rng, 24, 30)) {
+      if (railway && Math.abs(pz - railway.z) < 7) continue;
+      if (station && pz > station.z0 && pz < station.z1) continue;   // 駅前広場は無電柱
+      poles.push({ x: poleX, z: pz, dir: poleDir, y: hillYAt(isHillside, pz) });
+    }
   }
 
-  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide, landmark, station, isHillside };
+  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide, landmark, station, isHillside,
+           isEuro, isSub, isKow };
 }
 
 /* ============================================================
@@ -771,11 +787,42 @@ function buildSignAtlas() {
     });
     ctx.textAlign = 'center';
   });
+  // #11 欧州: カフェの横看板 6 種(cafe0-5)。y256-310 の空き帯
+  const CAFE_DEFS = [
+    ['CAFÉ DE FLORE', '#20242a', '#e8dcc0'], ['LE MARAIS', '#3a2622', '#e6cf9a'],
+    ['BRASSERIE', '#242e28', '#e4dcc4'],      ['BOULANGERIE', '#2a2420', '#e8c98a'],
+    ['CHEZ NOUS', '#28222c', '#e0cdd8'],      ["L'OMBRE", '#20282e', '#d8e0dc'],
+  ];
+  CAFE_DEFS.forEach(([txt, bg, fg], i) => {
+    cell('cafe' + i, 192 + i * 128, 256, 128, 54, (w, h) => {
+      plate(w, h, bg, fg, false);
+      ctx.font = 'bold 22px Georgia, "Times New Roman", serif';
+      ctx.fillText(txt, w / 2, h / 2 + 1);
+    });
+  });
+  // #11 九龍: 突き出しネオン看板 8 種(kow0-7・漢字縦)。ほぼ黒地に高彩度=夜ネオン
+  const KOW_DEFS = [
+    ['金龍', '#ff3b52'], ['海鮮', '#24c4d8'], ['發財', '#ffc21e'], ['藥房', '#39d97a'],
+    ['麻雀', '#ff7a1e'], ['茶餐廳', '#e23af0'], ['大昌', '#ff3b52'], ['當舖', '#ffe14a'],
+  ];
+  KOW_DEFS.forEach(([txt, fg], i) => {
+    // 空き帯へ配置(aboard0/1・stName・ekimei・jikoku を避ける): 2 段組
+    const x = (i < 4 ? 256 : 512) + (i % 4) * 62, y = i < 4 ? 386 : 410;
+    cell('kow' + i, x, y, 58, 100, (w, h) => {
+      ctx.fillStyle = '#141013'; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = fg; ctx.lineWidth = 3; ctx.strokeRect(4, 4, w - 8, h - 8);
+      ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const n = txt.length, gap = Math.min(30, (h - 24) / Math.max(1, n - 1));
+      ctx.font = 'bold 26px "Hiragino Sans", "Yu Gothic", sans-serif';
+      [...txt].forEach((ch, k) => ctx.fillText(ch, w / 2, (h - gap * (n - 1)) / 2 + k * gap));
+    });
+  });
   const t = new THREE.CanvasTexture(c2);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
   return t;
 }
+const EURO_CAFE_COUNT = 6, KOW_SIGN_COUNT = 8;
 const signAtlas = buildSignAtlas();
 const matSign = new THREE.MeshStandardMaterial({ map: signAtlas, roughness: 0.9, metalness: 0,
   polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
@@ -1173,6 +1220,7 @@ function buildCity(layout) {
   const PADDY = [];   // 水田の田面(matPaddy 専用・季節連動色)
   const { roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, seed } = layout;
   const isHillside = layout.isHillside;
+  const isOverseas = layout.isEuro || layout.isSub || layout.isKow;   // #11 海外様式
   const hy = z => hillYAt(isHillside, z);   // 地物を段状地形に載せる高さ(非坂は 0)
   const bands = [];
   for (const sr of sideRoads) bands.push({ z0: sr.z - sr.w / 2, z1: sr.z + sr.w / 2 });
@@ -1249,6 +1297,11 @@ function buildCity(layout) {
   /* --- 駅(#9: ホーム・駅舎・跨線橋・ロータリー。station のみ) --- */
   if (layout.station) buildStation(layout, S, G, W, SIGN, D, GLOW);
 
+  /* --- 海外様式の街路家具(#11) --- */
+  if (layout.isEuro) buildEuroStreet(layout, S, D, GLOW);   // 石畳の目地+ガス灯
+  if (layout.isSub)  buildSuburbStreet(layout, S, seed);    // 消火栓
+  if (layout.isKow)  buildKowloonStreet(layout, S, D, GLOW);// 屋台+街灯
+
   /* --- 区画(坂の街は groundY だけ持ち上げて段に載せる) --- */
   for (const plot of plots) {
     placePlot(plot, layout, S, G, W, SIGN, PADDY);
@@ -1259,7 +1312,7 @@ function buildCity(layout) {
   for (const sr of sideRoads) {
     for (const s of (layout.isSeaside ? [-1] : [1, -1])) {   // 停止線(側道側。海辺は陸側のみ)
       box(S, s * (roadW / 2 + 1.3), 0.02, sr.z + 1.1, 0.45, 0.008, 2.6, 0xeeeeea);
-      if (PARAMS.signs) {
+      if (PARAMS.signs && !isOverseas) {   // 「止まれ」は日本の路面標示なので海外では出さない
         signPlane(SIGN, 'tomare', s * (roadW / 2 + 2.9), 0.025, sr.z + 1.1, 0.85, 2.3, s > 0 ? Math.PI / 2 : -Math.PI / 2, -Math.PI / 2);
       }
     }
@@ -1876,6 +1929,9 @@ function buildPlot(plot, layout, S, G, W, SIGN, PADDY) {
 
   if (plot.kind === 'paddy') { buildPaddy(plot, rng, S, PADDY); return; }
   if (plot.kind === 'landmark') { buildLandmark(plot, rng, S, G, W); return; }
+  if (plot.kind === 'euro') { buildEuroBlock(plot, rng, S, G, W, SIGN); return; }        // #11 欧州旧市街
+  if (plot.kind === 'suburb') { buildSuburbHouse(plot, rng, S, G, W, SIGN); return; }    // #11 米郊外
+  if (plot.kind === 'kowloon') { buildKowloonBlock(plot, rng, S, G, W, SIGN); return; }  // #11 アジア密集街
 
   // 敷地面
   const cPlot = PARAMS.season === 'snow' ? 0xe3e6e9 : plot.kind === 'lot' ? PAL.gravel : PAL.concrete;
@@ -2719,6 +2775,298 @@ function buildApt(plot, rng, S, G, W, SIGN) {
   plot.house = { cx, cz, bd, bw, H, floors, fh, wall, isApt: true };
 }
 
+/* ============================================================
+   #11 海外ロケーション — 建築様式パック(欧州旧市街 / 米郊外 / アジア密集街)
+============================================================ */
+
+/* --- 欧州旧市街(パリ/南欧風): 連棟組積造 4-6F・鎧戸・マンサード屋根・1F カフェ --- */
+const EURO_WALLS = [0xe4d8c4, 0xdcc9a8, 0xd8c2b0, 0xcabfa4, 0xe0cdb2, 0xc9b89e, 0xd6bfa0];
+const EURO_ROOFS = [0x5a5e63, 0x6a5048, 0x515560, 0x4e4a44];   // 亜鉛/スレート
+const EURO_SHUT  = [0x5a6b52, 0x4a5a6a, 0x8a5a3e, 0x6a4a58, 0x46504a];
+function buildEuroBlock(plot, rng, S, G, W, SIGN) {
+  const { side, row, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const bw = w + 0.02;                          // 連棟=間口いっぱい(隣と接する)
+  const bd = Math.min(rr(rng, 9, 12), depth - 1.5);
+  const floors = pick(rng, [4, 4, 5, 5, 6]);
+  const fh = 3.0;
+  const H = floors * fh + 0.6;
+  const cx = side * (xNear + bd / 2);
+  const cz = (z0 + z1) / 2;
+  const wall = pick(rng, EURO_WALLS);
+  const frontX = side * xNear;
+  const out = -side;
+  const shut = pick(rng, EURO_SHUT);
+
+  // 基壇+本体+階間コーニス(石の水平線=LINE で組積造に見える)
+  box(S, cx, 0.3, cz, bd + 0.1, 0.6, bw + 0.02, shade(wall, 0.88));
+  box(S, cx, 0.6 + H / 2, cz, bd, H, bw, wall);
+  for (let f = 1; f < floors; f++) {
+    box(S, frontX + out * 0.04, 0.6 + f * fh, cz, 0.16, 0.12, bw, shade(wall, 0.9));   // コーニス帯
+  }
+  box(S, frontX + out * 0.06, 0.6 + H - 0.35, cz, 0.2, 0.5, bw + 0.1, shade(wall, 0.82));  // 軒コーニス
+
+  // マンサード屋根(急勾配の寄棟=パリの屋根線)+ルカルヌ(前面の裾に接地)+煙突
+  const mBase = 0.6 + H;
+  const roofC = pick(rng, EURO_ROOFS);
+  hipRoof(S, cx, mBase, cz, bd + 0.3, bw + 0.3, 1.75, roofC);
+  const nDorm = Math.max(1, Math.round(bw / 3.4));
+  for (let i = 0; i < nDorm; i++) {
+    const dz = cz + (i - (nDorm - 1) / 2) * (bw / (nDorm + 0.3));
+    box(S, frontX + out * 0.02, mBase + 0.55, dz, 0.44, 0.95, 0.66, shade(wall, 0.96));   // 前壁面と面一
+    box(G, frontX + out * 0.09, mBase + 0.55, dz, 0.05, 0.62, 0.44, PAL.glassDay);
+    W.push({ gi: G.length - 1, kind: 'win', litAt: 17.5 + rng() * 4 });
+    box(S, frontX + out * 0.06, mBase + 1.08, dz, 0.5, 0.12, 0.72, shade(roofC, 0.9));     // 小庇
+  }
+  for (const cz2 of [cz - bw * 0.3, cz + bw * 0.32]) {   // 煙突(たまに)
+    if (rng() < 0.5) continue;
+    box(S, cx + rr(rng, -bd * 0.15, bd * 0.15), mBase + 1.5, cz2, 0.4, 1.0, 0.5, shade(wall, 0.7));
+  }
+
+  // 各階の縦長窓(鎧戸つき)+2F の錬鉄バルコニー。1F は店舗/入口なので 2F から
+  const nWin = Math.max(2, Math.round(bw / 2.2));
+  for (let f = 2; f <= floors; f++) {
+    const cy = 0.6 + (f - 1) * fh + fh * 0.55;
+    const wh = 1.7, ww = 0.95;
+    for (let i = 0; i < nWin; i++) {
+      const wz = cz + (i - (nWin - 1) / 2) * (bw / nWin);
+      box(S, frontX + out * 0.04, cy, wz, 0.14, wh + 0.24, ww + 0.24, shade(wall, 0.8));   // 窓枠石
+      box(G, frontX + out * 0.11, cy, wz, 0.03, wh, ww, PAL.glassDay);
+      W.push({ gi: G.length - 1, kind: 'win', litAt: 17.2 + (f + i) % 4 * 0.9 });
+      // 鎧戸(左右に開いた板)
+      for (const s3 of [1, -1]) {
+        box(S, frontX + out * 0.13, cy, wz + s3 * (ww * 0.62), 0.04, wh, ww * 0.5, shut);
+      }
+      if (f === 2) {   // 2F はフレンチバルコニー(手すり)
+        box(S, frontX + out * 0.22, cy - wh * 0.5 - 0.1, wz, 0.3, 0.06, ww + 0.5, 0x2e2e30);
+        for (let b = 0; b < 5; b++) box(S, frontX + out * 0.3, cy - wh * 0.5 + 0.25, wz - (ww + 0.4) / 2 + b * (ww + 0.4) / 4, 0.04, 0.55, 0.03, 0x2e2e30);
+        box(S, frontX + out * 0.36, cy - wh * 0.5 + 0.5, wz, 0.05, 0.05, ww + 0.5, 0x2e2e30);
+      }
+    }
+  }
+
+  // 1F: カフェ(大ガラス+オーニング+路上席)or 住居入口
+  const isCafe = row === 0 && rng() < 0.55;
+  if (isCafe) {
+    box(S, frontX + out * 0.02, 1.3, cz, 0.06, 2.4, bw - 0.5, 0x3a3128);   // 店構えの枠
+    box(G, frontX + out * 0.09, 1.25, cz, 0.04, 2.0, bw - 0.9, 0x2a323a);  // ガラス(店内)
+    W.push({ gi: G.length - 1, kind: 'shop' });
+    const awnC = pick(rng, [0x8a3a30, 0x2e5a44, 0x30405e, 0x6a5030]);
+    box(S, frontX + out * 0.9, 2.55, cz, 1.7, 0.08, bw - 0.3, awnC);       // オーニング
+    box(S, frontX + out * 1.72, 2.28, cz, 0.05, 0.5, bw - 0.3, shade(awnC, 0.85));   // 前垂れ
+    if (PARAMS.signs) { const key = 'cafe' + (plot.sub % EURO_CAFE_COUNT);
+      box(S, frontX + out * 0.07, 2.95, cz, 0.05, 0.5, Math.min(3.2, bw - 1), 0x2a2622);
+      signPlane(SIGN, key, frontX + out * 0.1, 2.95, cz, Math.min(3.0, bw - 1.2), 0.42, out > 0 ? 0 : Math.PI); }
+    // 路上席(小丸テーブル+椅子)
+    for (let t = 0; t < Math.min(3, Math.floor(bw / 2.2)); t++) {
+      const tz = z0 + 1.4 + t * 2.1, tx = frontX + out * 1.9;
+      cyl(S, tx, 0.38, tz, 0.28, 0.05, 0xdedad0); cyl(S, tx, 0.19, tz, 0.04, 0.38, 0x8a8680);
+      for (const cxo of [-0.55, 0.55]) { cyl(S, tx + cxo * 0.7, 0.22, tz, 0.16, 0.44, 0x6a5a48); box(S, tx + cxo * 0.7, 0.5, tz, 0.3, 0.3, 0.05, 0x6a5a48); }
+    }
+  } else {
+    box(S, frontX + out * 0.05, 1.25, cz + rr(rng, -bw * 0.2, bw * 0.2), 0.1, 2.5, 1.3, 0x4a3e34);  // 大扉
+    box(S, frontX + out * 0.12, 2.6, cz, 0.12, 0.2, bw, shade(wall, 0.75));                          // まぐさ
+  }
+
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall };
+}
+
+/* --- 米郊外(サバービア): 木造 2F+ポーチ・前庭芝生・ドライブウェイ・ピケットフェンス --- */
+const SUB_WALLS = [0xdfe2df, 0xd6cebe, 0xcdd6d2, 0xe0d2c0, 0xbcc8c2, 0xd0d4d8, 0xc8bca8];
+function buildSuburbHouse(plot, rng, S, G, W, SIGN) {
+  const { side, row, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const SNOW = PARAMS.season === 'snow';
+  const cx0 = side * xNear, cz = (z0 + z1) / 2;
+  // 前庭の芝生(雪なら雪原)
+  box(S, side * (xNear + depth / 2), 0.014, cz, depth, 0.04, w - 0.4, SNOW ? 0xe6e9ea : 0x8fa86a);
+
+  const bw = Math.min(w - 2.4, 9.5);
+  const bd = rr(rng, 7, 9);
+  const setb = depth * 0.42;                    // 深い前庭
+  const cx = side * (xNear + setb + bd / 2);
+  const floors = pick(rng, [1, 2, 2, 2]);
+  const fh = 2.8, H = floors * fh;
+  const wall = pick(rng, SUB_WALLS);
+  const roof = pick(rng, SNOW ? SNOW_ROOFS : [0x6a5048, 0x5a5e63, 0x4e4a44, 0x7a6a58]);
+  const frontX = side * (xNear + setb);
+  const out = -side;
+
+  box(S, cx, 0.25, cz, bd + 0.1, 0.5, bw + 0.1, shade(wall, 0.85));
+  box(S, cx, 0.5 + H / 2, cz, bd, H, bw, wall);
+  gableRoof(S, cx, 0.5 + H, cz, bd + 0.7, bw + 0.7, rr(rng, 1.4, 2.0), roof);   // 切妻(妻が前)
+
+  // ポーチ(前面に張り出し・柱+屋根)
+  const porchD = 1.6;
+  box(S, frontX + out * (porchD * 0.5), 0.28, cz, porchD, 0.14, bw * 0.8, shade(wall, 0.9));
+  for (const dz of [-bw * 0.36, bw * 0.36]) {   // ポーチ柱(左右 2 本)
+    box(S, frontX + out * (porchD - 0.15), 1.2, cz + dz, 0.12, 2.2, 0.12, 0xf0eee8);
+  }
+  box(S, frontX + out * (porchD * 0.55), 2.45, cz, porchD + 0.3, 0.12, bw * 0.85, roof);
+  box(S, frontX + out * 0.06, 1.2, cz + rr(rng, -bw * 0.15, bw * 0.15), 0.1, 2.1, 1.0, pick(rng, [0x8a3a30, 0x2e4a6a, 0x3a5a44, 0x5a4a6a]));  // ドア(色)
+
+  // 窓(シャッター無し・白枠)+切妻の妻窓
+  for (let f = 1; f <= floors; f++) {
+    const cy = 0.5 + (f - 1) * fh + 1.4;
+    for (const dz of [-bw * 0.26, bw * 0.26]) {
+      box(S, frontX + out * 0.03, cy, cz + dz, 0.12, 1.4, 1.15, 0xf2f0ea);
+      box(G, frontX + out * 0.09, cy, cz + dz, 0.03, 1.15, 0.92, PAL.glassDay);
+      W.push({ gi: G.length - 1, kind: 'win', litAt: 17.6 + rng() * 3.5 });
+    }
+  }
+
+  // ドライブウェイ+ガレージ(横)
+  const dwx = side * (xNear + rr(rng, 2, depth * 0.5));
+  box(S, side * (xNear + depth * 0.32), 0.02, z1 - 1.6, depth * 0.6, 0.04, 2.8, SNOW ? 0xdfe2e4 : 0xbdbbb4);
+  if (rng() < 0.6) clayCar(S, side * (xNear + depth * 0.4), 0.02, z1 - 1.6, 0, pick(rng, CAR_COLORS));
+
+  // ピケットフェンス(前面・道路際)+メールボックス
+  if (row === 0) {
+    const fx = side * (xNear + 0.2);
+    for (let pz = z0 + 0.4; pz < z1 - 0.3; pz += 0.42) {
+      box(S, fx, 0.42, pz, 0.06, 0.84, 0.16, 0xf0eee6);   // 杭
+    }
+    box(S, fx, 0.66, cz, 0.05, 0.05, w - 0.6, 0xe8e6de);  // 横桟
+    if (PARAMS.signs) {   // メールボックス
+      const mz = z0 + 1.0;
+      cyl(S, side * (xNear + 0.5), 0.5, mz, 0.05, 1.0, 0x5a5e62);
+      box(S, side * (xNear + 0.5), 1.05, mz, 0.5, 0.28, 0.22, pick(rng, [0x2e4a6a, 0x8a3a30, 0x3a3e44]));
+    }
+  }
+  // 庭木
+  for (let i = 0; i < 1 + Math.floor(rng() * 2); i++) {
+    const tx = side * (xNear + rr(rng, depth * 0.15, depth * 0.35));
+    const tz = rr(rng, z0 + 1, z1 - 1), th = rr(rng, 2.6, 4.2);
+    cyl(S, tx, th * 0.45, tz, 0.13, th * 0.9, 0x6a5644);
+    blob(S, tx, th + 0.2, tz, rr(rng, 1.6, 2.4), pick(rng, seasonLeaf()));
+  }
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall };
+}
+
+/* --- アジア密集街(香港/九龍風): 高層雑居ビル・突き出し看板・室外機の壁・ネオン --- */
+const KOW_WALLS = [0xb2ad9e, 0xbfb8a8, 0xa8a294, 0xb6a898, 0x9aa096, 0xb0a894];   // 深い谷で影落ちするので明るめ
+const KOW_NEON  = [0xff3b52, 0x24c4d8, 0xffc21e, 0x39d97a, 0xff7a1e, 0xe23af0];
+function buildKowloonBlock(plot, rng, S, G, W, SIGN) {
+  const { side, row, z0, z1, xNear, depth } = plot;
+  const w = z1 - z0;
+  const bw = w + 0.02;                           // 密集=間口いっぱい
+  const bd = Math.min(rr(rng, 9, 13), depth - 0.6);
+  const floors = pick(rng, [7, 8, 9, 10, 11, 12]);
+  const fh = 2.7, H = floors * fh;
+  const cx = side * (xNear + bd / 2);
+  const cz = (z0 + z1) / 2;
+  const wall = pick(rng, KOW_WALLS);
+  const frontX = side * xNear;
+  const out = -side;
+
+  box(S, cx, H / 2, cz, bd, H, bw, wall);
+  box(S, cx, H + 0.2, cz, bd + 0.15, 0.4, bw + 0.15, shade(wall, 0.85));   // パラペット
+  // 屋上の水タンク+雑然
+  for (let i = 0; i < 2 + Math.floor(rng() * 3); i++) {
+    box(S, cx + rr(rng, -bd * 0.3, bd * 0.3), H + 0.7 + rng() * 0.4, cz + rr(rng, -bw * 0.35, bw * 0.35), rr(rng, 0.8, 1.5), rr(rng, 0.8, 1.6), rr(rng, 0.8, 1.5), pick(rng, [0x9a9488, 0x6a6e72, 0x7a5a48]));
+  }
+
+  // 各階の窓グリッド(密)+室外機の壁+物干し
+  const nWin = Math.max(3, Math.round(bw / 1.6));
+  for (let f = 2; f <= floors; f++) {   // 1F は店先なので窓グリッドは 2F から
+    const cy = (f - 1) * fh + fh * 0.55;
+    for (let i = 0; i < nWin; i++) {
+      const wz = cz + (i - (nWin - 1) / 2) * (bw / nWin);
+      box(G, frontX + out * 0.06, cy, wz, 0.04, 1.2, 0.72, PAL.glassDay);
+      W.push({ gi: G.length - 1, kind: 'win', litAt: 16.5 + (f * 3 + i) % 5 * 0.8 });
+      if (rng() < 0.5) box(S, frontX + out * 0.28, cy - 0.5, wz, 0.4, 0.4, 0.55, 0xcfccc4);   // 室外機
+      if (rng() < 0.3) box(S, frontX + out * (0.5 + rng()), cy, wz, 0.02, 0.5, 0.9, pick(rng, [0xd8d0c0, 0xb8c4d8, 0xd8b8b8]));  // 物干し
+    }
+  }
+
+  // 突き出し看板の密林(漢字ネオン。夜=W で発光)
+  if (PARAMS.signs) {
+    const nSign = 3 + Math.floor(rng() * 4);
+    for (let i = 0; i < nSign; i++) {
+      const sy = 1.5 + rng() * (H - 3);
+      const sh = rr(rng, 1.4, 2.6), sw2 = rr(rng, 0.5, 0.8);
+      const proj = rr(rng, 1.2, 2.4);   // 道路への突き出し量
+      const neon = pick(rng, KOW_NEON);
+      const key = 'kow' + (Math.floor(rng() * KOW_SIGN_COUNT));
+      // 看板の箱(裏板)+発光面+文字は同じ bz を共有(横ずれ防止)
+      const bz = cz + rr(rng, -bw * 0.3, bw * 0.3) + (i - nSign / 2) * 0.15;
+      box(S, frontX + out * (proj * 0.5), sy, bz, proj, sh + 0.1, sw2 + 0.06, 0x2a2622);
+      box(G, frontX + out * proj, sy, bz, 0.06, sh, sw2, neon);
+      W.push({ gi: G.length - 1, kind: 'neon', neon: [((neon >> 16) & 255) / 255, ((neon >> 8) & 255) / 255, (neon & 255) / 255] });
+      signPlane(SIGN, key, frontX + out * (proj + 0.04), sy, bz, sw2 * 0.9, sh * 0.9, out > 0 ? Math.PI / 2 : -Math.PI / 2);
+    }
+  }
+  // 1F 店先(シャッター or 開店の暖色灯)
+  box(S, frontX + out * 0.05, 1.2, cz, 0.08, 2.4, bw - 0.3, 0x3a352e);
+  box(G, frontX + out * 0.1, 1.15, cz, 0.04, 1.9, bw - 0.7, 0xffd8a0);
+  W.push({ gi: G.length - 1, kind: 'shop' });
+  plot.house = { cx, cz, bd, bw, H, floors, fh, wall };
+}
+
+/* --- 欧州の街路: 石畳の目地(albedo エッジで LINE に格子)+ガス灯 --- */
+function buildEuroStreet(layout, S, D, GLOW) {
+  const { roadW, seed } = layout;
+  const SNOW = PARAMS.season === 'snow';
+  const cPave = SNOW ? 0xd7dade : 0x9fa0a2;   // 石畳
+  const cJoint = SNOW ? 0xc2c6ca : 0x86888a;  // 目地(やや暗)
+  // 車道を石畳色で上塗り+目地格子(縦横の細線 box=albedo で線画に出る)
+  box(S, 0, 0.012, 0, roadW, 0.02, L + 30, cPave);
+  for (let cz = -L / 2 - 8; cz < L / 2 + 8; cz += 1.15) {              // 横目地(円弧気味に見せず直線で簡易)
+    box(S, 0, 0.02, cz, roadW, 0.006, 0.06, cJoint);
+  }
+  for (let x = -roadW / 2 + 0.6; x < roadW / 2; x += 1.15) {          // 縦目地
+    box(S, x, 0.02, 0, 0.06, 0.006, L + 30, cJoint);
+  }
+  // 歩道の縁石(両側の連続石)
+  for (const s of [1, -1]) box(S, s * (roadW / 2 + 0.2), 0.09, 0, 0.34, 0.18, L + 30, SNOW ? 0xe4e6e8 : 0xb8b6b0);
+  // ガス灯(鋳鉄柱+ランタン。夜に点灯)
+  const rng = mulberry32(hash2(seed, 1111));
+  for (let z = -L / 2 + 12; z < L / 2 - 8; z += 24) {
+    for (const s of [1, -1]) {
+      const gx = s * (roadW / 2 + 0.75), gz = z + (s > 0 ? 0 : 12);
+      cyl(S, gx, 1.9, gz, 0.06, 3.8, 0x2e2e32);                        // 柱
+      box(S, gx, 3.85, gz, 0.28, 0.5, 0.28, 0x33333a);                // ランタン枠
+      box(S, gx, 4.16, gz, 0.34, 0.12, 0.34, 0x2e2e32);               // 笠
+      GLOW.pos.push(gx, 3.85, gz); GLOW.col.push(1, 0.86, 0.55);
+      decal(D, gx - s * 0.2, 0.03, gz, 4.2, 0xffdca0);
+    }
+  }
+}
+
+/* --- 米郊外の街路: 消火栓(たまに) --- */
+function buildSuburbStreet(layout, S, seed) {
+  const { roadW } = layout;
+  const rng = mulberry32(hash2(seed, 1212));
+  for (let z = -L / 2 + 20; z < L / 2 - 10; z += rr(rng, 34, 52)) {
+    const s = rng() < 0.5 ? 1 : -1;
+    const hx = s * (roadW / 2 + 0.9);
+    cyl(S, hx, 0.3, z, 0.14, 0.6, 0xc23a2e);                          // 胴
+    blob(S, hx, 0.66, z, 0.18, 0xb03227);                            // 頂部
+    for (const s2 of [1, -1]) cyl(S, hx + s2 * 0.16, 0.42, z, 0.06, 0.16, 0xa83226);  // 側口
+  }
+}
+
+/* --- 九龍の街路: 屋台(たまに)+吊り街灯 --- */
+function buildKowloonStreet(layout, S, D, GLOW) {
+  const { roadW, seed } = layout;
+  const rng = mulberry32(hash2(seed, 1313));
+  for (let z = -L / 2 + 14; z < L / 2 - 8; z += rr(rng, 20, 30)) {
+    const s = rng() < 0.5 ? 1 : -1;
+    if (rng() < 0.5) {   // 屋台(赤テント+台)
+      const sx = s * (roadW / 2 + 1.2);
+      box(S, sx, 0.75, z, 1.6, 0.1, 1.8, 0x8a8578);
+      for (const dx of [-0.7, 0.7]) for (const dz of [-0.8, 0.8]) box(S, sx + dx, 0.4, z + dz, 0.06, 0.8, 0.06, 0x6a6058);
+      box(S, sx, 1.9, z, 1.9, 0.1, 2.1, pick(rng, [0xc23a2e, 0x3e6a58, 0xe0a828]));   // テント
+      GLOW.pos.push(sx, 1.6, z); GLOW.col.push(1, 0.82, 0.5);
+      decal(D, sx, 0.03, z, 2.6, 0xffdc9a);
+    }
+    // 吊り街灯(裸電球)
+    const lx = s * (roadW / 2 - 0.3);
+    cyl(S, lx, 3.2, z, 0.04, 0.6, 0x3a3a3e);
+    GLOW.pos.push(lx, 2.85, z); GLOW.col.push(1, 0.9, 0.72);
+  }
+}
+
 /* --- 俯瞰デバッグ線(区画=緑 / 道路=白 / 踏切=赤 / 電柱=黄) --- */
 function buildDebugLines(layout) {
   const pos = [], col = [];
@@ -2802,7 +3150,7 @@ function parseHash() {
     if (typeof d === 'boolean') PARAMS[k] = v === 'true';
     else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
-    else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural', 'station', 'hillside'].includes(v)) PARAMS[k] = v;
+    else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural', 'station', 'hillside', 'euro', 'suburbia', 'kowloon'].includes(v)) PARAMS[k] = v;
     else if (k === 'season' && ['none', 'sakura', 'autumn', 'snow'].includes(v)) PARAMS[k] = v;
     else if (k === 'landmark' && ['none', 'shrine', 'school', 'park', 'random'].includes(v)) PARAMS[k] = v;
   }
@@ -2863,6 +3211,7 @@ const VEND_DAY = new THREE.Color(0xd8e4ea);
 const VEND_LIT = new THREE.Color(0xcfefff).multiplyScalar(1.6);
 const SHOP_DAY = new THREE.Color(0x46525c);
 const SHOP_LIT = new THREE.Color(0xffe6b0).multiplyScalar(1.12);  // 店明かり(暖白。大面積なので控えめ)
+const _neonC = new THREE.Color();   // #11 九龍ネオンの色計算用(使い回し)
 
 function updateWindowLights(fx) {
   if (!city?.glassMesh) return;
@@ -2871,7 +3220,10 @@ function updateWindowLights(fx) {
   const nightish = fx > 0.12;
   for (const w of city.windows) {
     let c;
-    if (w.kind === 'vend') {                // 自販機パネル(夜常時点灯)
+    if (w.kind === 'neon') {                // 九龍のネオン管(夜は自色で強発光・昼は淡く点灯)
+      _neonC.setRGB(w.neon[0], w.neon[1], w.neon[2]);
+      c = nightish ? _neonC.multiplyScalar(1.7) : _neonC.multiplyScalar(0.55 + 0.35);
+    } else if (w.kind === 'vend') {         // 自販機パネル(夜常時点灯)
       c = nightish ? VEND_LIT : VEND_DAY;
     } else if (w.kind === 'shop') {         // 店明かり・袖看板(夜常時点灯・暖色)
       c = nightish ? SHOP_LIT : SHOP_DAY;
@@ -3061,7 +3413,7 @@ const hint = document.getElementById('hint');
 
 const SCHEMA = [
   { sec: '街並み(再生成)', open: true, items: [
-    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道', station: '駅前', hillside: '坂の街' }, regen: true },
+    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道', station: '駅前', hillside: '坂の街', euro: '欧州旧市街', suburbia: '米郊外', kowloon: 'アジア密集街' }, regen: true },
     { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
     { k: 'season', label: '季節', type: 'select', opts: { none: '通常', sakura: '桜', autumn: '紅葉', snow: '雪' }, regen: true },
     { k: 'landmark', label: 'ランドマーク', type: 'select', opts: { none: 'なし', shrine: '神社', school: '学校', park: '公園', random: 'ランダム' }, regen: true },
@@ -3335,7 +3687,7 @@ function buildModebar() {
 function updateHudStatic() {
   const l = city?.layout;
   if (!l) return;
-  const locName = { shotengai: '商店街', seaside: '海辺', rural: '田舎道', station: '駅前', hillside: '坂の街' }[PARAMS.location] ?? (l.isArt ? '幹線' : '住宅街');
+  const locName = { shotengai: '商店街', seaside: '海辺', rural: '田舎道', station: '駅前', hillside: '坂の街', euro: '欧州旧市街', suburbia: '米郊外', kowloon: '密集街' }[PARAMS.location] ?? (l.isArt ? '幹線' : '住宅街');
   hudStat.textContent = `[${locName}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
 }
 let fpsFrames = 0, fpsTime = 0, fpsNow = 0;
