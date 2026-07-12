@@ -118,7 +118,7 @@ const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
 ============================================================ */
 const PARAMS = {
   seed: 20260710,
-  location: 'residential',  // residential=住宅街 / shotengai=商店街
+  location: 'residential',  // residential=住宅街 / shotengai=商店街 / seaside=海辺 / rural=田舎 / station=駅前
   shutterRatio: 0.25,       // 商店街のシャッター店比率(1=シャッター街)
   season: 'none',           // none / sakura(桜) / autumn(紅葉) / snow(雪)
   landmark: 'none',         // none / shrine(神社) / school(学校) / park(公園) / random
@@ -369,17 +369,25 @@ function genLayout(P) {
     z += P.sideRoadEvery * rr(rng, 0.85, 1.3);
   }
 
-  // --- 踏切予約帯(側道と近すぎたら数回リトライ。海辺では踏切なし) ---
+  // --- 踏切予約帯(側道と近すぎたら数回リトライ。海辺では踏切なし。駅前は線路必須) ---
   const isSeaside = P.location === 'seaside';
+  const isStation = P.location === 'station';
   let railway = null;
-  if (P.crossing && !isSeaside) {
-    for (let tryI = 0; tryI < 8 && !railway; tryI++) {
+  if ((P.crossing || isStation) && !isSeaside) {
+    for (let tryI = 0; tryI < (isStation ? 20 : 8) && !railway; tryI++) {
       const rz = -L / 2 + rr(rng, 40, 150);
       const ok = bands.every(b => rz + 5.5 < b.z0 - 6 || rz - 5.5 > b.z1 + 6);
       if (ok) {
         railway = { z: rz, w: 9 };
         bands.push({ z0: rz - 4.5, z1: rz + 4.5, kind: 'rail' });
       }
+    }
+    if (!railway && isStation) {           // 駅は線路が無いと成立しない: 決定的スキャンで帯を避けて確保
+      for (let rz = -L / 2 + 40; rz <= -L / 2 + 150 && !railway; rz += 7) {
+        if (bands.every(b => rz + 5.5 < b.z0 - 6 || rz - 5.5 > b.z1 + 6)) railway = { z: rz, w: 9 };
+      }
+      if (!railway) railway = { z: -L / 2 + 95, w: 9 };   // 理論上は到達しない最終手段
+      bands.push({ z0: railway.z - 4.5, z1: railway.z + 4.5, kind: 'rail' });
     }
   }
   bands.sort((a, b) => a.z0 - b.z0);
@@ -425,6 +433,29 @@ function genLayout(P) {
     }
   }
 
+  // --- 駅前帯(#9): 線路の +z/+x 側を駅エリアとして確保。station 以外は一切走らない ---
+  let station = null;
+  if (isStation && railway) {
+    const rz = railway.z;
+    station = { x0: roadW / 2 + 0.85, x1: 58, z0: rz + 4.1, z1: rz + 24.5, rz };
+    // 駅エリアと z 帯が重なる +x 側の区画を除去(ランドマーク束ねより先に行う)
+    for (let i = plots.length - 1; i >= 0; i--) {
+      const p = plots[i];
+      if (p.side === 1 && p.z1 > station.z0 - 0.3 && p.z0 < station.z1 + 0.3) plots.splice(i, 1);
+    }
+    // 駅広場を横切る側道は除去(停止線・カーブミラー等の付属物ごと消える)
+    for (let i = sideRoads.length - 1; i >= 0; i--) {
+      const sr = sideRoads[i];
+      if (sr.z + sr.w / 2 > station.z0 && sr.z - sr.w / 2 < station.z1) sideRoads.splice(i, 1);
+    }
+    // 向かい(-x 側 row0)の家 2-3 軒を駅前商店化(buildShop 流用。sub は既存のまま=決定的)
+    let shopN = 0;
+    for (const p of plots) {
+      if (p.side === -1 && p.row === 0 && p.kind === 'house' && shopN < 3 &&
+          p.z1 > station.z0 && p.z0 < station.z1 + 6) { p.kind = 'shop'; p.stationFront = true; shopN++; }
+    }
+  }
+
   // --- ランドマーク区画(#8): 生成済み row0 の隣接区画を束ねて 1 区画に置換。
   //     選定は独立 rng — 'none' のとき一切走らず、既存の乱数列・区画を変えない ---
   let landmark = null;
@@ -437,7 +468,8 @@ function genLayout(P) {
     const runs = [];
     for (const side of (isSeaside ? [-1] : [1, -1])) {
       let cur = null;
-      for (const p of plots.filter(p2 => p2.side === side && p2.row === 0)) {
+      // 駅前商店(stationFront)は束ね対象から外す=ランが切れて landmark は別の場所に建つ
+      for (const p of plots.filter(p2 => p2.side === side && p2.row === 0 && !p2.stationFront)) {
         if (cur && p.z0 - cur[cur.length - 1].z1 < 2.5) cur.push(p);
         else runs.push(cur = [p]);
       }
@@ -466,10 +498,11 @@ function genLayout(P) {
   const poleDir = -poleSide;   // 電柱付属物(防犯灯・自販機など)の道路向き
   for (let pz = -L / 2 + rr(rng, 4, 10); pz < L / 2 - 4; pz += rr(rng, 24, 30)) {
     if (railway && Math.abs(pz - railway.z) < 7) continue;
+    if (station && pz > station.z0 && pz < station.z1) continue;   // 駅前広場は無電柱
     poles.push({ x: poleX, z: pz, dir: poleDir });
   }
 
-  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide, landmark };
+  return { seed, roadW, isArt, sidewalkW, edge0, sideRoads, railway, plots, poles, isSeaside, poleSide, landmark, station };
 }
 
 /* ============================================================
@@ -686,6 +719,34 @@ function buildSignAtlas() {
     ctx.fillText('ランチ', w / 2, 58);
     ctx.font = 'bold 34px "Hiragino Sans", sans-serif';
     ctx.fillText('800円', w / 2, 108);
+  });
+  // 駅(#9): 駅舎の駅名板 / ホーム駅名標 / 時刻表
+  cell('stName', 256, 320, 256, 64, (w, h) => {
+    plate(w, h, '#f2f0e8', '#2e3440', true);
+    ctx.font = 'bold 40px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('かすみ台駅', w / 2, h / 2 + 2);
+  });
+  cell('ekimei', 512, 320, 256, 88, (w, h) => {
+    plate(w, h, '#f4f3ee', '#22262e', false);
+    ctx.font = 'bold 38px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('かすみだい', w / 2, 34);
+    ctx.font = 'bold 17px "Hiragino Sans", sans-serif';
+    ctx.fillText('← ひがしの      にしはら →', w / 2, 66);
+    ctx.fillStyle = '#3e7a52';
+    ctx.fillRect(0, h - 8, w, 8);                    // 下端の緑帯
+  });
+  cell('jikoku', 768, 320, 128, 160, (w, h) => {
+    plate(w, h, '#f4f3ee', '#2a2e36', true);
+    ctx.font = 'bold 20px "Hiragino Sans", "Yu Gothic", sans-serif';
+    ctx.fillText('時 刻 表', w / 2, 24);
+    ctx.strokeStyle = '#565a62'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(12, 38); ctx.lineTo(w - 12, 38); ctx.stroke();
+    ctx.font = '13px "Hiragino Sans", sans-serif';
+    ctx.textAlign = 'left';
+    ['6  12 42', '7  02 28 51', '8  15 45', '9  20', '12 05 35', '17 18 48', '21 10'].forEach((s, i) => {
+      ctx.fillText(s, 16, 58 + i * 14);
+    });
+    ctx.textAlign = 'center';
   });
   const t = new THREE.CanvasTexture(c2);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -1156,6 +1217,9 @@ function buildCity(layout) {
     }
   }
 
+  /* --- 駅(#9: ホーム・駅舎・跨線橋・ロータリー。station のみ) --- */
+  if (layout.station) buildStation(layout, S, G, W, SIGN, D, GLOW);
+
   /* --- 区画 --- */
   for (const plot of plots) {
     buildPlot(plot, layout, S, G, W, SIGN, PADDY);
@@ -1526,6 +1590,7 @@ function buildCity(layout) {
   let crossing = null;
   if (railway) {
     crossing = buildCrossingDynamics(railout(layout), group, geos);
+    if (layout.station) crossing.stopX = 22;   // 駅停車位置(編成中心≒ホーム中央 28)
   }
 
   /* --- 俯瞰デバッグ線 --- */
@@ -1650,7 +1715,22 @@ function updateCrossing(dt) {
     }
     case 'closed': {
       blink();
-      c.train.position.x = 170 - c.t * 26;    // 26 m/s ≒ 94km/h のローカル線
+      if (!c.stopX) {
+        c.train.position.x = 170 - c.t * 26;  // 26 m/s ≒ 94km/h のローカル線
+      } else {
+        // 駅停車(#9): 等減速で進入 → 停車 → 等加速で発車。遮断機は下りたまま
+        const v = 26, D1 = 170 - c.stopX, tA = 2 * D1 / v, tB = 7;
+        if (c.t < tA) {
+          const k = c.t / tA;
+          c.train.position.x = 170 - D1 * k * (2 - k);        // 初速 26 → 0
+        } else if (c.t < tA + tB) {
+          c.train.position.x = c.stopX;
+        } else {
+          const t2 = c.t - tA - tB, acc = 1.9, tR = v / acc;  // 0 → 26 m/s
+          c.train.position.x = c.stopX - (t2 < tR ? 0.5 * acc * t2 * t2
+                                                  : 0.5 * acc * tR * tR + v * (t2 - tR));
+        }
+      }
       if (c.train.position.x < -190) { c.state = 'open'; c.t = 0; }
       break;
     }
@@ -2240,6 +2320,155 @@ function buildPark(plot, rng, S) {
   }
 }
 
+/* ============================================================
+   駅(#9: 単式ホーム・平屋駅舎・跨線橋・駅前ロータリー)
+   配置は決定的(メイン rng に一切触れない)。station のみ呼ばれる
+============================================================ */
+function buildStation(layout, S, G, W, SIGN, D, GLOW) {
+  const st = layout.station;
+  const rz = st.rz;
+  const SNOW = PARAMS.season === 'snow';
+  const IRON = 0x7a8288;
+
+  /* x-y 面内の斜め板(跨線橋の階段・手すり用)。Rz 正回転=+x 端が上がる */
+  const slope = (x0, y0, x1, y1, z, thick, w2, hex) => {
+    const g = UNIT_BOX.clone();
+    g.applyMatrix4(new THREE.Matrix4().makeScale(Math.hypot(x1 - x0, y1 - y0), thick, w2));
+    g.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.atan2(y1 - y0, x1 - x0)));
+    g.translate((x0 + x1) / 2, (y0 + y1) / 2, z);
+    S.push(colorize(g, hex));
+  };
+
+  /* --- 単式ホーム(線路の +z 側) --- */
+  const pfX0 = 10, pfX1 = 52, pfH = 0.9;
+  const pfZ0 = rz + 1.95, pfZ1 = rz + 5.1;
+  const pfCx = (pfX0 + pfX1) / 2, pfCz = (pfZ0 + pfZ1) / 2;
+  box(S, pfCx, pfH / 2, pfCz, pfX1 - pfX0, pfH, pfZ1 - pfZ0, 0xc9c6bd);            // ホーム体
+  box(S, pfCx, pfH + 0.008, pfCz, pfX1 - pfX0, 0.016, pfZ1 - pfZ0 - 0.2, SNOW ? 0xe4e7e9 : 0xbdbab2);
+  box(S, pfCx, pfH + 0.022, rz + 2.55, pfX1 - pfX0 - 1, 0.014, 0.3, 0xf2c83e);     // 点字ブロック
+  box(S, pfCx, pfH + 0.02, rz + 2.22, pfX1 - pfX0 - 1, 0.012, 0.12, 0xf0efe8);     // 縁白線
+
+  /* ホーム屋根(中央部: 柱+梁+片流れ。Rx 正回転=+z 端が下がる=広場側へ水勾配) */
+  for (let px = 18; px <= 38; px += 5) {
+    cyl(S, px, pfH + 1.35, rz + 4.35, 0.07, 2.7, IRON);
+  }
+  box(S, 28, pfH + 2.62, rz + 4.35, 21, 0.09, 0.12, IRON);                          // 梁
+  {
+    const g = UNIT_BOX.clone();
+    g.applyMatrix4(new THREE.Matrix4().makeScale(22.5, 0.08, 3.3));
+    g.applyMatrix4(new THREE.Matrix4().makeRotationX(0.13));
+    g.translate(28, pfH + 2.82, rz + 3.85);
+    S.push(colorize(g, 0x6d747c));
+  }
+
+  /* ホーム備品: ベンチ・時刻表・駅名標・照明(夜グロー) */
+  for (const bx of [22, 34]) {
+    box(S, bx, pfH + 0.38, rz + 4.55, 1.6, 0.06, 0.42, 0x8a6a48);
+    for (const dx of [-0.6, 0.6]) box(S, bx + dx, pfH + 0.19, rz + 4.55, 0.08, 0.38, 0.36, 0x6a6e72);
+  }
+  box(S, 30.5, pfH + 1.18, rz + 4.78, 1.1, 0.84, 0.06, 0xeceae2);                   // 時刻表板
+  signPlane(SIGN, 'jikoku', 30.5, pfH + 1.18, rz + 4.74, 0.62, 0.76, Math.PI);
+  for (const px of [29.98, 31.02]) cyl(S, px, pfH + 0.42, rz + 4.78, 0.03, 0.84, IRON);
+  for (const ex of [14, 46]) {                                                      // 駅名標(両面)
+    for (const dx of [-0.8, 0.8]) cyl(S, ex + dx, pfH + 0.92, rz + 3.1, 0.04, 1.84, 0xd8d6ce);
+    box(S, ex, pfH + 1.6, rz + 3.1, 1.92, 0.68, 0.07, 0xf0efe9);
+    signPlane(SIGN, 'ekimei', ex, pfH + 1.6, rz + 3.055, 1.8, 0.6, Math.PI);
+    signPlane(SIGN, 'ekimei', ex, pfH + 1.6, rz + 3.145, 1.8, 0.6, 0);
+  }
+  for (const lx of [20, 28, 36]) {                                                  // 屋根下蛍光灯
+    box(S, lx, pfH + 2.42, rz + 3.7, 1.1, 0.07, 0.16, 0xe8e8e4);
+    GLOW.pos.push(lx, pfH + 2.36, rz + 3.7);
+    GLOW.col.push(0.95, 0.95, 0.85);
+    decal(D, lx, pfH + 0.05, rz + 3.7, 2.6, 0xfff2cc);
+  }
+
+  /* --- 駅舎(平屋・寄棟・改札開口が正面/背面を貫通) --- */
+  const bX0 = 22, bX1 = 34, bZ0 = pfZ1, bZ1 = pfZ1 + 6.2;
+  const bCx = (bX0 + bX1) / 2, bCz = (bZ0 + bZ1) / 2, bW = bX1 - bX0, bD = bZ1 - bZ0;
+  const wallC = 0xe6e1d4, H = 3.4;
+  box(S, bCx, 0.22, bCz, bW + 0.15, 0.44, bD + 0.15, 0x9b968e);                     // 基礎
+  const doorW = 2.6;
+  for (const zf of [bZ1 - 0.075, bZ0 + 0.075]) {                                    // 正面(+z)・背面(ホーム)
+    box(S, (bX0 + bCx - doorW / 2) / 2, 0.44 + H / 2, zf, bCx - doorW / 2 - bX0, H, 0.15, wallC);
+    box(S, (bCx + doorW / 2 + bX1) / 2, 0.44 + H / 2, zf, bX1 - bCx - doorW / 2, H, 0.15, wallC);
+    box(S, bCx, 0.44 + H - 0.42, zf, doorW, 0.84, 0.15, wallC);                     // 垂れ壁
+  }
+  for (const xf of [bX0 + 0.075, bX1 - 0.075]) {                                    // 側壁
+    box(S, xf, 0.44 + H / 2, bCz, 0.15, H, bD, wallC);
+  }
+  hipRoof(S, bCx, 0.44 + H, bCz, bW + 1.5, bD + 1.5, 1.2, 0x5f6772);                // 寄棟(棟=x 長軸)
+  // 正面まわり: 駅名板・庇・出札窓・ポスト・自販機
+  box(S, bCx, 0.44 + H - 0.95, bZ1 + 0.35, doorW + 1.6, 0.09, 0.9, 0x6d747c);       // 庇
+  box(S, bCx, 0.44 + H - 0.35, bZ1 + 0.06, 3.4, 0.62, 0.1, 0xf0eee6);               // 駅名板の下地
+  signPlane(SIGN, 'stName', bCx, 0.44 + H - 0.35, bZ1 + 0.115, 3.24, 0.56, 0);
+  box(G, bCx - 3.1, 0.44 + 1.5, bZ1 + 0.005, 1.7, 1.15, 0.045, PAL.glassDay);       // 出札窓(夜点灯)
+  W.push({ gi: G.length - 1, kind: 'shop' });
+  box(G, bX0 + 0.02, 0.44 + 1.55, bCz, 0.045, 1.15, 2.4, PAL.glassDay);             // 側面窓
+  W.push({ gi: G.length - 1, kind: 'shop' });
+  box(G, bX1 - 0.02, 0.44 + 1.55, bCz, 0.045, 1.15, 2.4, PAL.glassDay);
+  W.push({ gi: G.length - 1, kind: 'shop' });
+  cyl(S, bX1 + 1.3, 0.62, bZ1 + 1.1, 0.17, 1.0, 0xc0392e);                          // 丸ポスト
+  cyl(S, bX1 + 1.3, 1.2, bZ1 + 1.1, 0.19, 0.16, 0xa83226);
+  box(S, bX0 - 1.4, 0.92, bZ1 + 0.75, 0.72, 1.84, 1.05, 0xd8dcde);                  // 自販機
+  box(G, bX0 - 1.4, 1.15, bZ1 + 1.29, 0.85, 1.05, 0.05, 0xd8e4ea);
+  W.push({ gi: G.length - 1, kind: 'vend' });
+  decal(D, bCx, 0.045, bZ1 + 1.6, 3.4, 0xffe9c0);                                   // 夜の駅明かりだまり
+  GLOW.pos.push(bCx, 0.44 + H - 0.9, bZ1 + 0.3);
+  GLOW.col.push(1, 0.9, 0.7);
+  // 改札ラッチ(背面=ホーム側の通路)
+  for (const dx of [-0.7, 0.1, 0.9]) {
+    box(S, bCx + dx, 0.44 + 0.45, bZ0 - 0.55, 0.14, 0.9, 1.1, 0xb8bcc2);
+  }
+  // ホームへのスロープ(駅舎背面開口 → ホーム面)
+  box(S, bCx, pfH / 2 + 0.22, bZ0 + 0.0, doorW + 0.8, pfH, 1.2, 0xc9c6bd);
+
+  /* --- 跨線橋(線路を跨いで駅裏へ。柱+桁+手すり壁+階段 2 基) --- */
+  const fbX = 45, fbY = 4.7, fbZ0 = rz - 6.4, fbZ1 = rz + 3.6;
+  for (const [px, pz] of [[fbX - 0.75, fbZ0 + 0.5], [fbX + 0.75, fbZ0 + 0.5], [fbX - 0.75, fbZ1 - 0.5], [fbX + 0.75, fbZ1 - 0.5]]) {
+    box(S, px, fbY / 2, pz, 0.16, fbY, 0.16, IRON);                                 // 支柱
+  }
+  box(S, fbX, fbY, (fbZ0 + fbZ1) / 2, 2.0, 0.22, fbZ1 - fbZ0, 0x8a9096);            // 桁
+  for (const dx of [-0.92, 0.92]) {
+    box(S, fbX + dx, fbY + 0.62, (fbZ0 + fbZ1) / 2, 0.08, 1.0, fbZ1 - fbZ0, 0x9aa2a8);   // 手すり壁
+  }
+  // 階段: ホーム側(+z)は x+ へ、駅裏側(-z)も x+ へ降りる
+  slope(fbX + 1.0, fbY, fbX + 5.6, pfH + 0.05, fbZ1 - 0.9, 0.14, 1.7, 0x8a9096);
+  slope(fbX + 1.0, fbY + 1.0, fbX + 5.6, pfH + 1.05, fbZ1 - 1.72, 0.06, 0.06, IRON);      // 手すり
+  slope(fbX + 1.0, fbY + 1.0, fbX + 5.6, pfH + 1.05, fbZ1 - 0.08, 0.06, 0.06, IRON);
+  slope(fbX + 1.0, fbY, fbX + 6.4, 0.05, fbZ0 + 0.9, 0.14, 1.7, 0x8a9096);
+  slope(fbX + 1.0, fbY + 1.0, fbX + 6.4, 1.05, fbZ0 + 1.72, 0.06, 0.06, IRON);
+  slope(fbX + 1.0, fbY + 1.0, fbX + 6.4, 1.05, fbZ0 + 0.08, 0.06, 0.06, IRON);
+
+  /* --- 駅前ロータリー --- */
+  const rX0 = st.x0 + 0.6, rX1 = 38, rZ0 = bZ1 + 0.9, rZ1 = st.z1 - 0.5;
+  box(S, (rX0 + rX1) / 2, 0.032, (rZ0 + rZ1) / 2, rX1 - rX0, 0.05, rZ1 - rZ0, SNOW ? 0xc4c6c9 : PAL.asphalt);
+  // 中央島(縁石+植栽+駅前時計)
+  const ciX = 20, ciZ = (rZ0 + rZ1) / 2;
+  cyl(S, ciX, 0.1, ciZ, 3.1, 0.16, 0xd8d7d4);
+  cyl(S, ciX, 0.16, ciZ, 2.7, 0.12, SNOW ? 0xdfe3e4 : 0x9cab7e);
+  blob(S, ciX - 1.1, 0.55, ciZ + 0.7, 1.0, pick0(PAL.hedge));
+  blob(S, ciX + 0.9, 0.5, ciZ - 0.8, 0.9, pick0(PAL.hedge, 1));
+  cyl(S, ciX, 1.7, ciZ, 0.055, 3.4, 0x8a8e92);                                      // 駅前時計柱
+  clock(S, ciX, 3.6, ciZ, 0.34, [1, -1]);
+  // バス停(標識+ベンチ)+タクシー区画白線+客待ちタクシー
+  const bsX = rX0 + 1.6, bsZ = rZ0 + 1.4;
+  cyl(S, bsX, 1.15, bsZ, 0.035, 2.3, IRON);
+  cylX(S, bsX, 2.45, bsZ, 0.34, 0.06, 0xe8e6de, Math.PI / 2);                       // 円板(バス停標識)
+  box(S, bsX + 1.6, 0.38, bsZ, 1.5, 0.06, 0.4, 0x8a6a48);
+  for (const dx of [-0.55, 0.55]) box(S, bsX + 1.6 + dx, 0.19, bsZ, 0.08, 0.38, 0.34, 0x6a6e72);
+  for (let i = 0; i < 3; i++) {                                                     // タクシー区画白線
+    box(S, 29 + i * 2.6, 0.062, rZ1 - 2.4, 0.12, 0.012, 4.2, 0xeeeeea);
+  }
+  clayCar(S, 30.3, 0.07, rZ1 - 2.6, Math.PI / 2, 0xe8e8e6);                         // 客待ちタクシー
+  clayCar(S, 32.9, 0.07, rZ1 - 2.2, Math.PI / 2, 0xe8e8e6);
+  // 広場外周の車止めポール(道路側)
+  for (let pz = rZ0 + 0.6; pz < rZ1 - 0.4; pz += 2.6) {
+    cyl(S, rX0 + 0.25, 0.38, pz, 0.055, 0.76, 0xc9c5bc);
+  }
+}
+/* pick の rng 非依存版(駅は決定的配置なので index 直指定) */
+function pick0(arr, i = 0) { return arr[i % arr.length]; }
+
 /* --- 粘土自転車(商店街の店前) --- */
 function clayBike(S, cx, cz, ry) {
   const c = Math.cos(ry), s2 = Math.sin(ry);
@@ -2390,6 +2619,7 @@ function buildDebugLines(layout) {
   const srX0 = -46, srX1 = layout.isSeaside ? layout.roadW / 2 : 45;
   for (const sr of layout.sideRoads) rect(srX0, sr.z - sr.w / 2, srX1, sr.z + sr.w / 2, 0xffffff);
   if (layout.railway) rect(-100, layout.railway.z - 4.5, 100, layout.railway.z + 4.5, 0xff5555);
+  if (layout.station) rect(layout.station.x0, layout.station.z0, layout.station.x1, layout.station.z1, 0x66ccff, 0.4);
   for (const p of layout.poles) rect(p.x - 0.4, p.z - 0.4, p.x + 0.4, p.z + 0.4, 0xffee55, 0.5);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -2450,7 +2680,7 @@ function parseHash() {
     if (typeof d === 'boolean') PARAMS[k] = v === 'true';
     else if (typeof d === 'number') { const n = parseFloat(v); if (Number.isFinite(n)) PARAMS[k] = n; }
     else if (k === 'roadType' && (v === 'local' || v === 'arterial')) PARAMS[k] = v;
-    else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural'].includes(v)) PARAMS[k] = v;
+    else if (k === 'location' && ['residential', 'shotengai', 'seaside', 'rural', 'station'].includes(v)) PARAMS[k] = v;
     else if (k === 'season' && ['none', 'sakura', 'autumn', 'snow'].includes(v)) PARAMS[k] = v;
     else if (k === 'landmark' && ['none', 'shrine', 'school', 'park', 'random'].includes(v)) PARAMS[k] = v;
   }
@@ -2707,7 +2937,7 @@ const hint = document.getElementById('hint');
 
 const SCHEMA = [
   { sec: '街並み(再生成)', open: true, items: [
-    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道' }, regen: true },
+    { k: 'location', label: 'ロケーション', type: 'select', opts: { residential: '住宅街', shotengai: '商店街', seaside: '海辺の道', rural: '田舎道', station: '駅前' }, regen: true },
     { k: 'shutterRatio', label: 'シャッター店率(商店街)', type: 'range', min: 0, max: 1, step: 0.05, pct: true, regen: true },
     { k: 'season', label: '季節', type: 'select', opts: { none: '通常', sakura: '桜', autumn: '紅葉', snow: '雪' }, regen: true },
     { k: 'landmark', label: 'ランドマーク', type: 'select', opts: { none: 'なし', shrine: '神社', school: '学校', park: '公園', random: 'ランダム' }, regen: true },
@@ -2980,7 +3210,7 @@ function buildModebar() {
 function updateHudStatic() {
   const l = city?.layout;
   if (!l) return;
-  const locName = { shotengai: '商店街', seaside: '海辺', rural: '田舎道' }[PARAMS.location] ?? (l.isArt ? '幹線' : '住宅街');
+  const locName = { shotengai: '商店街', seaside: '海辺', rural: '田舎道', station: '駅前' }[PARAMS.location] ?? (l.isArt ? '幹線' : '住宅街');
   hudStat.textContent = `[${locName}] 道路 ${l.roadW}m / 余白 ${PARAMS.setback}m / seed ${PARAMS.seed}`;
 }
 let fpsFrames = 0, fpsTime = 0, fpsNow = 0;
