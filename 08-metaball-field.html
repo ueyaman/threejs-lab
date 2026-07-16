@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 - Metaball Field | Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #eef0f2; overflow: hidden; }
+    canvas { display: block; }
+    #back {
+      position: fixed; top: 1rem; left: 1rem; z-index: 10;
+      color: #7cf; font-size: 0.85rem; text-decoration: none;
+      font-family: monospace;
+      background: rgba(0,0,0,0.5); padding: 0.3rem 0.6rem;
+      border-radius: 4px; border: 1px solid #333;
+    }
+    #back:hover { border-color: #7cf; }
+  </style>
+</head>
+<body>
+  <a id="back" href="index.html">← 一覧へ</a>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    const MAX = 24;
+    const INIT_N = 12;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    const scene  = new THREE.Scene();
+    const camera = new THREE.Camera();
+
+    // ---- Wall bounds (field coords) ----
+    function wallX() { return window.innerWidth / window.innerHeight; }
+    function wallY() { return 1.0; }
+
+    // ---- Ball management ----
+    function makeBall() {
+      const wx = wallX(), wy = wallY();
+      const angle = Math.random() * Math.PI * 2;
+      const spd = 0.8 + Math.random() * 0.8;
+      return {
+        x: (Math.random() * 2 - 1) * wx * 0.8,
+        y: (Math.random() * 2 - 1) * wy * 0.8,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        r: 0.18 + Math.random() * 0.16,
+        pf: 0.5 + Math.random() * 0.9,
+        pp: Math.random() * Math.PI * 2,
+        hue: Math.random(),
+        life: 1.0,
+        dying: false,
+      };
+    }
+
+    let balls = [];
+    for (let i = 0; i < INIT_N; i++) balls.push(makeBall());
+
+    const centers = [], radii = [], hueArr = [];
+    for (let i = 0; i < MAX; i++) {
+      centers.push(new THREE.Vector2());
+      radii.push(0);
+      hueArr.push(0);
+    }
+
+    const uniforms = {
+      uResolution: { value: new THREE.Vector2() },
+      uCenters:    { value: centers },
+      uRadii:      { value: radii },
+      uHue:        { value: hueArr },
+      uCount:      { value: 0 },
+      uThreshold:  { value: 0.60 },
+      uSoftness:   { value: 0.120 },
+      uShowField:  { value: 1.0 },
+      uTime:       { value: 0.0 },
+      uPalette:    { value: 0.30 },
+      uScroll:     { value: 0.0 },
+      uSpeed:      { value: new Float32Array(MAX) },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: /* glsl */`
+        void main() { gl_Position = vec4(position, 1.0); }
+      `,
+      fragmentShader: /* glsl */`
+        uniform vec2  uResolution;
+        uniform vec2  uCenters[${MAX}];
+        uniform float uRadii[${MAX}];
+        uniform float uHue[${MAX}];
+        uniform int   uCount;
+        uniform float uThreshold;
+        uniform float uSoftness;
+        uniform float uTime;
+        uniform float uPalette;
+        uniform float uScroll;
+        uniform float uSpeed[${MAX}];
+
+        vec3 palette(float t) {
+          return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+        }
+
+        float hash21(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(hash21(i), hash21(i + vec2(1,0)), f.x),
+            mix(hash21(i + vec2(0,1)), hash21(i + vec2(1,1)), f.x), f.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0, a = 0.5;
+          for (int i = 0; i < 4; i++) { v += a * vnoise(p); p = p * 2.0 + 0.5; a *= 0.5; }
+          return v;
+        }
+
+        vec3 journey(float t, vec2 px) {
+          vec2 np = px * 0.003;
+          vec3 c = vec3(1.0, 1.0, 0.98);
+          c = mix(c, vec3(1.0, 0.82, 0.3), smoothstep(0.02, 0.06, t));
+          c = mix(c, vec3(0.95, 0.4, 0.08), smoothstep(0.06, 0.10, t));
+          c = mix(c, vec3(0.01, 0.01, 0.03), smoothstep(0.10, 0.18, t));
+          float starZone = smoothstep(0.14, 0.18, t) * (1.0 - smoothstep(0.22, 0.27, t));
+          c += step(0.97, hash21(floor(px * 0.4))) * starZone * vec3(0.6, 0.7, 1.0);
+          c = mix(c, vec3(0.04, 0.08, 0.25), smoothstep(0.22, 0.28, t));
+          c = mix(c, vec3(0.15, 0.3, 0.7), smoothstep(0.28, 0.33, t));
+          c = mix(c, vec3(0.4, 0.65, 0.95), smoothstep(0.33, 0.38, t));
+          c = mix(c, vec3(0.88, 0.90, 0.94), smoothstep(0.40, 0.46, t));
+          float cloudZ = smoothstep(0.39, 0.43, t) * (1.0 - smoothstep(0.49, 0.53, t));
+          c = mix(c, vec3(0.96), fbm(np * 4.0 + t * 8.0) * cloudZ * 0.6);
+          c = mix(c, vec3(0.4, 0.65, 0.95), smoothstep(0.50, 0.56, t));
+          c = mix(c, vec3(0.15, 0.5, 0.75), smoothstep(0.56, 0.62, t));
+          float oceanZ = smoothstep(0.58, 0.63, t) * (1.0 - smoothstep(0.72, 0.78, t));
+          c += vnoise(px * 0.008 + vec2(0.0, uTime * 0.2)) * oceanZ * 0.06 * vec3(0.2, 0.5, 0.8);
+          c = mix(c, vec3(0.04, 0.15, 0.4), smoothstep(0.62, 0.70, t));
+          c = mix(c, vec3(0.005, 0.01, 0.03), smoothstep(0.70, 0.80, t));
+          c = mix(c, vec3(0.04, 0.025, 0.015), smoothstep(0.80, 0.84, t));
+          c = mix(c, vec3(0.12, 0.06, 0.03), smoothstep(0.84, 0.88, t));
+          c = mix(c, vec3(0.5, 0.12, 0.02), smoothstep(0.88, 0.93, t));
+          float magmaZ = smoothstep(0.90, 0.94, t);
+          c = mix(c, vec3(1.0, 0.35, 0.05), fbm(np * 3.0 + uTime * 0.08) * magmaZ * 0.4);
+          c = mix(c, vec3(1.0, 0.55, 0.1), smoothstep(0.93, 0.96, t));
+          c = mix(c, vec3(1.0, 1.0, 0.98), smoothstep(0.96, 1.0, t));
+          return c;
+        }
+
+        void main() {
+          vec2 p = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+          p.x *= uResolution.x / uResolution.y;
+
+          float F = 0.0;
+          vec3  Fcol = vec3(0.0);
+          float Fspd = 0.0;
+          for (int i = 0; i < ${MAX}; i++) {
+            if (i >= uCount) break;
+            float r = uRadii[i];
+            if (r <= 0.0) continue;
+            vec2 d = p - uCenters[i];
+            float w = exp(-dot(d, d) / (r * r));
+            F += w;
+            Fcol += w * palette(uHue[i] + uTime * uPalette * 0.1);
+            Fspd += w * uSpeed[i];
+          }
+          Fcol /= max(F, 1e-4);
+          Fspd /= max(F, 1e-4);
+
+          vec2 uv = gl_FragCoord.xy / uResolution;
+          float jW = 0.06;
+          float jt = clamp(uScroll + (1.0 - uv.y) * jW, 0.0, 1.0);
+          vec3 bg = journey(jt, gl_FragCoord.xy);
+
+          float body = smoothstep(uThreshold, uThreshold + uSoftness * 0.15, F);
+
+          float fw = fwidth(F) * (1.0 + uSoftness * 8.0);
+          float rim = 1.0 - smoothstep(0.0, fw, abs(F - uThreshold));
+
+          // Center proximity: 1 at center, 0 at corners
+          float aspect = uResolution.x / uResolution.y;
+          vec2 screenPos = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+          float centerProx = 1.0 - min(length(screenPos), 1.0);
+          centerProx *= centerProx; // quadratic — sharp peak at center
+
+          // Combine speed + center proximity for visual intensity
+          float energy = min(Fspd * 0.2 + centerProx * 0.6, 1.0);
+
+          vec3 bodyCol = mix(Fcol, Fcol * 0.7 + 0.3, energy);
+          float bodyAlpha = body * (0.10 + 0.15 * smoothstep(uThreshold, uThreshold + 0.5, F) + energy * 0.12);
+
+          vec3 rimCol = mix(Fcol * 0.85 + 0.15, vec3(1.0), energy * 0.5);
+          float rimAlpha = rim * (0.5 + energy * 0.5);
+
+          vec3 col = bg;
+          col = mix(col, bodyCol, bodyAlpha);
+          col = mix(col, rimCol, rimAlpha);
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+
+    // ---- Mouse ----
+    const mouse = { x: 0, y: 0, px: 0, py: 0, vx: 0, vy: 0, inside: false };
+
+    function toField(cx, cy) {
+      let x = (cx / window.innerWidth) * 2 - 1;
+      let y = -((cy / window.innerHeight) * 2 - 1);
+      x *= window.innerWidth / window.innerHeight;
+      return [x, y];
+    }
+
+    window.addEventListener('pointermove', e => {
+      const [x, y] = toField(e.clientX, e.clientY);
+      if (!mouse.inside) { mouse.px = x; mouse.py = y; }
+      mouse.x = x; mouse.y = y; mouse.inside = true;
+    });
+    window.addEventListener('pointerleave', () => { mouse.inside = false; });
+
+    // ---- Scroll ----
+    const JOURNEY_WINDOW = 0.06;
+    let scrollPos = 0, maxScroll = 1.0 - JOURNEY_WINDOW;
+
+    window.addEventListener('wheel', e => {
+      e.preventDefault();
+      scrollPos += e.deltaY * 0.0004;
+      scrollPos = Math.max(0, Math.min(scrollPos, maxScroll));
+      uniforms.uScroll.value = scrollPos;
+    }, { passive: false });
+
+    // ---- Resolution (device pixels) ----
+    function updateResolution() {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.getDrawingBufferSize(uniforms.uResolution.value);
+    }
+    updateResolution();
+
+    window.addEventListener('resize', updateResolution);
+
+    // ---- Animation loop ----
+    const MOUSE_PUSH = 2.0;
+    const DRIFT_SPEED = 2.50;
+    let simTime = 0, last = performance.now();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+
+      simTime += dt * DRIFT_SPEED;
+      uniforms.uTime.value = simTime;
+
+      const wx = wallX(), wy = wallY();
+
+      // Mouse velocity
+      if (mouse.inside && dt > 0) {
+        const rawVx = (mouse.x - mouse.px) / dt;
+        const rawVy = (mouse.y - mouse.py) / dt;
+        const smooth = Math.min(5.0 * dt, 1.0);
+        mouse.vx += (rawVx - mouse.vx) * smooth;
+        mouse.vy += (rawVy - mouse.vy) * smooth;
+      } else {
+        mouse.vx *= 0.9; mouse.vy *= 0.9;
+      }
+      mouse.px = mouse.x; mouse.py = mouse.y;
+      const mspeed = Math.hypot(mouse.vx, mouse.vy);
+      const maxMV = 2.0;
+      if (mspeed > maxMV) { mouse.vx *= maxMV / mspeed; mouse.vy *= maxMV / mspeed; }
+
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+
+        // Smooth steering via sin — each ball has unique phase
+        const steerAngle = Math.sin(simTime * 0.3 * b.pf + b.pp) * 0.8;
+        const cs = Math.cos(steerAngle * dt), sn = Math.sin(steerAngle * dt);
+        const nvx = b.vx * cs - b.vy * sn;
+        const nvy = b.vx * sn + b.vy * cs;
+        b.vx = nvx; b.vy = nvy;
+
+        // Speed governor — only kicks in at extremes, never fights small changes
+        const curSpd = Math.hypot(b.vx, b.vy);
+        const baseSpd = 0.8 + b.r * 0.5;
+        const minSpd = baseSpd * 0.3, maxSpd = baseSpd * 3.0;
+        if (curSpd < minSpd && curSpd > 0.01) {
+          b.vx *= minSpd / curSpd; b.vy *= minSpd / curSpd;
+        } else if (curSpd > maxSpd) {
+          b.vx *= maxSpd / curSpd; b.vy *= maxSpd / curSpd;
+        }
+
+        // Ball-to-ball repulsion — wide and firm
+        for (let j = i + 1; j < balls.length; j++) {
+          const o = balls[j];
+          const dx = o.x - b.x, dy = o.y - b.y;
+          const d = Math.sqrt(dx * dx + dy * dy + 0.01);
+          const pushDist = (b.r + o.r) * 4.0;
+          if (d < pushDist) {
+            const t = 1.0 - d / pushDist;
+            const push = 4.0 * t * t / d;
+            b.vx -= dx * push * dt; b.vy -= dy * push * dt;
+            o.vx += dx * push * dt; o.vy += dy * push * dt;
+          }
+        }
+
+        // Mouse disturbance
+        if (mouse.inside) {
+          const dx = b.x - mouse.x, dy = b.y - mouse.y;
+          const infl = Math.exp(-(dx * dx + dy * dy) / 0.5);
+          b.vx += mouse.vx * infl * MOUSE_PUSH * dt;
+          b.vy += mouse.vy * infl * MOUSE_PUSH * dt;
+        }
+
+        // Uniform movement — no position-based speed change
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+
+        // Wall bounce
+        const bx = wx - b.r * 0.5;
+        const by = wy - b.r * 0.5;
+        if (b.x > bx) { b.x = bx; b.vx = -Math.abs(b.vx); }
+        if (b.x < -bx) { b.x = -bx; b.vx = Math.abs(b.vx); }
+        if (b.y > by) { b.y = by; b.vy = -Math.abs(b.vy); }
+        if (b.y < -by) { b.y = -by; b.vy = Math.abs(b.vy); }
+
+        const spd = Math.hypot(b.vx, b.vy);
+        // Smooth stretch tracking (no jitter — exponential ease)
+        const targetStretch = 1.0 + Math.min(spd * 0.25, 0.5);
+        b.stretch = b.stretch || 1.0;
+        b.stretch += (targetStretch - b.stretch) * Math.min(3.0 * dt, 1.0);
+
+        centers[i].set(b.x, b.y);
+        const pulse = 0.88 + 0.12 * Math.sin(simTime * b.pf + b.pp);
+        radii[i] = b.r * pulse * b.life * b.stretch;
+        hueArr[i] = b.hue;
+        uniforms.uSpeed.value[i] = spd;
+      }
+
+      for (let i = balls.length; i < MAX; i++) radii[i] = 0;
+
+      // Mouse ball
+      const mi = balls.length;
+      centers[mi].set(mouse.x, mouse.y);
+      radii[mi] = mouse.inside ? (0.05 + Math.min(mspeed * 0.05, 0.5)) : 0.0;
+      hueArr[mi] = 0.08;
+      uniforms.uSpeed.value[mi] = mspeed;
+
+      uniforms.uCount.value = balls.length + 1;
+      renderer.render(scene, camera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
