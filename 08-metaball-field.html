@@ -20,6 +20,9 @@
 </head>
 <body>
   <a id="back" href="index.html">← 一覧へ</a>
+  <video id="bgVideo" src="docs/260719/bg-blur.mp4"
+         autoplay muted loop playsinline
+         style="display:none"></video>
 
   <script type="importmap">
     {
@@ -36,43 +39,61 @@
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setPixelRatio(1);
     document.body.appendChild(renderer.domElement);
 
     const scene  = new THREE.Scene();
     const camera = new THREE.Camera();
 
     // ---- Wall bounds (field coords) ----
-    function wallX() { return window.innerWidth / window.innerHeight; }
-    function wallY() { return 1.0; }
+    // Wall bounds derived from camera visible area (focal=1.6, camZ varies with aspect)
+    function getCamZ() {
+      const aspect = window.innerWidth / window.innerHeight;
+      return 3.8 + Math.max(0, 1.0 - aspect) * 2.5;
+    }
+    function wallX() { return getCamZ() / 3.2 * (window.innerWidth / window.innerHeight) * 0.85; }
+    function wallY() { return getCamZ() / 3.2 * 0.85; }
 
     // ---- Ball management ----
     function makeBall() {
       const wx = wallX(), wy = wallY();
       const angle = Math.random() * Math.PI * 2;
       const spd = 0.8 + Math.random() * 0.8;
+      const angle2 = Math.random() * Math.PI * 2;
       return {
         x: (Math.random() * 2 - 1) * wx * 0.8,
         y: (Math.random() * 2 - 1) * wy * 0.8,
-        vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
+        z: (Math.random() * 2 - 1) * 0.25,
+        vx: Math.cos(angle) * spd * 0.9,
+        vy: Math.sin(angle) * spd * 0.9,
+        vz: Math.sin(angle2) * spd * 0.3,
         r: 0.18 + Math.random() * 0.16,
         pf: 0.5 + Math.random() * 0.9,
         pp: Math.random() * Math.PI * 2,
         hue: Math.random(),
         life: 1.0,
         dying: false,
+        sqX: 1.0, sqY: 1.0, sqVx: 0, sqVy: 0,
+        wallStick: 0, wallDirX: 0, wallDirY: 0, wallTanV: 0, preSpeed: 0,
+        sf1: 0.15 + Math.random() * 0.35,
+        sf2: 0.07 + Math.random() * 0.15,
+        sf3: 0.4 + Math.random() * 0.8,
+        sp1: Math.random() * Math.PI * 2,
+        sp2: Math.random() * Math.PI * 2,
+        sp3: Math.random() * Math.PI * 2,
+        samp: 0.4 + Math.random() * 0.5,
       };
     }
 
     let balls = [];
     for (let i = 0; i < INIT_N; i++) balls.push(makeBall());
 
-    const centers = [], radii = [], hueArr = [];
+    const centers = [], radii = [], hueArr = [], squashArr = [];
     for (let i = 0; i < MAX; i++) {
       centers.push(new THREE.Vector2());
       radii.push(0);
       hueArr.push(0);
+      squashArr.push(new THREE.Vector2(1, 1));
     }
 
     const uniforms = {
@@ -81,14 +102,36 @@
       uRadii:      { value: radii },
       uHue:        { value: hueArr },
       uCount:      { value: 0 },
-      uThreshold:  { value: 0.60 },
-      uSoftness:   { value: 0.120 },
-      uShowField:  { value: 1.0 },
       uTime:       { value: 0.0 },
-      uPalette:    { value: 0.30 },
       uScroll:     { value: 0.0 },
       uSpeed:      { value: new Float32Array(MAX) },
+      uSquash:     { value: squashArr },
+      uZ:          { value: new Float32Array(MAX) },
+      uBgTex:      { value: null },
+      uHasVideo:   { value: 0.0 },
     };
+
+    // Video texture
+    const videoEl = document.getElementById('bgVideo');
+    function initVideoTex() {
+      if (uniforms.uHasVideo.value > 0) return;
+      const vTex = new THREE.VideoTexture(videoEl);
+      vTex.minFilter = THREE.LinearFilter;
+      vTex.magFilter = THREE.LinearFilter;
+      uniforms.uBgTex.value = vTex;
+      uniforms.uHasVideo.value = 1.0;
+    }
+    videoEl.addEventListener('loadeddata', () => {
+      initVideoTex();
+      videoEl.play().catch(() => {});
+    });
+    if (videoEl.readyState >= 2) {
+      initVideoTex();
+      videoEl.play().catch(() => {});
+    }
+    document.addEventListener('click', () => {
+      if (videoEl.paused) videoEl.play().catch(() => {});
+    }, { once: true });
 
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -101,15 +144,88 @@
         uniform float uRadii[${MAX}];
         uniform float uHue[${MAX}];
         uniform int   uCount;
-        uniform float uThreshold;
-        uniform float uSoftness;
         uniform float uTime;
-        uniform float uPalette;
         uniform float uScroll;
         uniform float uSpeed[${MAX}];
+        uniform vec2  uSquash[${MAX}];
+        uniform float uZ[${MAX}];
+        uniform sampler2D uBgTex;
+        uniform float uHasVideo;
+
+        const int   MAX_STEPS = 48;
+        const float MAX_DIST  = 20.0;
+        const float SURF_DIST = 0.002;
+        const float BLEND_K   = 0.6;
 
         vec3 palette(float t) {
           return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+        }
+
+        float smin(float a, float b, float k) {
+          float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);
+          return mix(b, a, h) - k*h*(1.0-h);
+        }
+
+        float sceneSDF(vec3 p) {
+          float d = MAX_DIST;
+          for (int i = 0; i < ${MAX}; i++) {
+            if (i >= uCount) break;
+            float r = uRadii[i];
+            if (r <= 0.0) continue;
+            vec3 center = vec3(uCenters[i], uZ[i]);
+            vec3 q = p - center;
+            q.x /= uSquash[i].x;
+            q.y /= uSquash[i].y;
+            float sd = length(q) - r;
+            sd *= min(min(uSquash[i].x, uSquash[i].y), 1.0);
+            d = smin(d, sd, BLEND_K);
+          }
+          return d;
+        }
+
+        vec3 sceneColor(vec3 p) {
+          float totalW = 0.0;
+          vec3 col = vec3(0.0);
+          float spd = 0.0;
+          for (int i = 0; i < ${MAX}; i++) {
+            if (i >= uCount) break;
+            float r = uRadii[i];
+            if (r <= 0.0) continue;
+            vec3 center = vec3(uCenters[i], uZ[i]);
+            float dist = length(p - center);
+            float w = exp(-dist*dist / (r*r*2.0));
+            col += w * palette(uHue[i] + uTime * 0.03);
+            spd += w * uSpeed[i];
+            totalW += w;
+          }
+          col /= max(totalW, 0.001);
+          spd /= max(totalW, 0.001);
+          return col * (0.9 + min(spd * 0.1, 0.3));
+        }
+
+        vec3 getNormal(vec3 p) {
+          vec2 e = vec2(0.002, 0.0);
+          return normalize(vec3(
+            sceneSDF(p+e.xyy) - sceneSDF(p-e.xyy),
+            sceneSDF(p+e.yxy) - sceneSDF(p-e.yxy),
+            sceneSDF(p+e.yyx) - sceneSDF(p-e.yyx)
+          ));
+        }
+
+        vec3 glowColor(vec3 p) {
+          float totalW = 0.0;
+          vec3 col = vec3(0.0);
+          for (int i = 0; i < ${MAX}; i++) {
+            if (i >= uCount) break;
+            float r = uRadii[i];
+            if (r <= 0.0) continue;
+            vec3 center = vec3(uCenters[i], uZ[i]);
+            float dist = length(p - center);
+            float w = exp(-dist*dist / (r*r*3.0));
+            col += w * palette(uHue[i] + uTime * 0.03);
+            totalW += w;
+          }
+          return col / max(totalW, 0.001);
         }
 
         float hash21(vec2 p) {
@@ -159,53 +275,106 @@
         }
 
         void main() {
-          vec2 p = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
-          p.x *= uResolution.x / uResolution.y;
+          vec2 uv = (gl_FragCoord.xy - 0.5*uResolution) / uResolution.y;
 
-          float F = 0.0;
-          vec3  Fcol = vec3(0.0);
-          float Fspd = 0.0;
-          for (int i = 0; i < ${MAX}; i++) {
-            if (i >= uCount) break;
-            float r = uRadii[i];
-            if (r <= 0.0) continue;
-            vec2 d = p - uCenters[i];
-            float w = exp(-dot(d, d) / (r * r));
-            F += w;
-            Fcol += w * palette(uHue[i] + uTime * uPalette * 0.1);
-            Fspd += w * uSpeed[i];
-          }
-          Fcol /= max(F, 1e-4);
-          Fspd /= max(F, 1e-4);
-
-          vec2 uv = gl_FragCoord.xy / uResolution;
-          float jW = 0.06;
-          float jt = clamp(uScroll + (1.0 - uv.y) * jW, 0.0, 1.0);
-          vec3 bg = journey(jt, gl_FragCoord.xy);
-
-          float body = smoothstep(uThreshold, uThreshold + uSoftness * 0.15, F);
-
-          float fw = fwidth(F) * (1.0 + uSoftness * 8.0);
-          float rim = 1.0 - smoothstep(0.0, fw, abs(F - uThreshold));
-
-          // Center proximity: 1 at center, 0 at corners
+          // Camera: fixed, pulls back on portrait screens
           float aspect = uResolution.x / uResolution.y;
-          vec2 screenPos = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
-          float centerProx = 1.0 - min(length(screenPos), 1.0);
-          centerProx *= centerProx; // quadratic — sharp peak at center
+          float camZ = 3.8 + max(0.0, 1.0 - aspect) * 2.5;
+          vec3 ro = vec3(0.0, 0.3, camZ);
+          vec3 target = vec3(0.0);
+          vec3 fwd = normalize(target - ro);
+          vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+          vec3 up = cross(right, fwd);
+          vec3 rd = normalize(uv.x*right + uv.y*up + 1.6*fwd);
 
-          // Combine speed + center proximity for visual intensity
-          float energy = min(Fspd * 0.2 + centerProx * 0.6, 1.0);
+          // Background
+          vec2 screenUV = gl_FragCoord.xy / uResolution;
+          float bgT = clamp(uScroll + (1.0 - screenUV.y) * 0.06, 0.0, 1.0);
+          vec3 jBg = journey(bgT, gl_FragCoord.xy);
+          vec3 bg = jBg;
+          if (uHasVideo > 0.5) {
+            vec2 vuv = vec2(screenUV.x, 1.0 - screenUV.y);
+            vec3 vid = vec3(0.0);
+            for (int bx = -1; bx <= 1; bx++) {
+              for (int by = -1; by <= 1; by++) {
+                vec2 off = vec2(float(bx), float(by)) * 20.0 / uResolution;
+                vid += texture2D(uBgTex, clamp(vuv + off, 0.0, 1.0)).rgb;
+              }
+            }
+            vid /= 9.0;
+            bg = mix(jBg, vid, 0.6);
+          }
 
-          vec3 bodyCol = mix(Fcol, Fcol * 0.7 + 0.3, energy);
-          float bodyAlpha = body * (0.10 + 0.15 * smoothstep(uThreshold, uThreshold + 0.5, F) + energy * 0.12);
+          vec3 lightDir = normalize(vec3(0.5, 0.8, 0.6));
 
-          vec3 rimCol = mix(Fcol * 0.85 + 0.15, vec3(1.0), energy * 0.5);
-          float rimAlpha = rim * (0.5 + energy * 0.5);
-
+          // --- 2-layer raymarching for transparency ---
+          float t = 0.0;
+          float closestDist = MAX_DIST;
+          vec3 closestPos = ro;
           vec3 col = bg;
-          col = mix(col, bodyCol, bodyAlpha);
-          col = mix(col, rimCol, rimAlpha);
+          int layers = 0;
+
+          for (int layer = 0; layer < 2; layer++) {
+            bool hit = false;
+            int steps = layer == 0 ? MAX_STEPS : 32;
+            for (int i = 0; i < MAX_STEPS; i++) {
+              if (i >= steps) break;
+              vec3 p = ro + t*rd;
+              float d = sceneSDF(p);
+              if (layer == 0 && d < closestDist) { closestDist = d; closestPos = p; }
+              if (d < SURF_DIST) { hit = true; break; }
+              t += d;
+              if (t > MAX_DIST) break;
+            }
+
+            if (!hit) break;
+            layers++;
+
+            vec3 p = ro + t*rd;
+            vec3 n = getNormal(p);
+            vec3 v = -rd;
+
+            float diff = max(dot(n, lightDir), 0.0);
+            vec3 h = normalize(lightDir + v);
+            float spec = pow(max(dot(n, h), 0.0), 80.0);
+            float fresnel = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+
+            vec3 baseCol = sceneColor(p);
+            vec3 iridescent = palette(fresnel*0.8 + dot(n, lightDir)*0.25 + 0.05);
+            vec3 specCol = vec3(1.0, 0.98, 0.92) * spec;
+
+            vec3 refl = reflect(rd, n);
+            float reflT = clamp(uScroll + (1.0 - (refl.y*0.5+0.5)) * 0.06, 0.0, 1.0);
+            vec3 reflCol = journey(reflT, gl_FragCoord.xy + refl.xz*200.0);
+            if (uHasVideo > 0.5) {
+              vec2 reflUV = clamp(vec2(screenUV.x, 1.0 - screenUV.y) + refl.xz * 0.08, 0.0, 1.0);
+              reflCol = mix(reflCol, texture2D(uBgTex, reflUV).rgb, 0.4);
+            }
+
+            float layerFade = (layer == 0) ? 1.0 : 0.4;
+            float lift = (0.12 + fresnel * 0.08) * layerFade;
+            col *= (1.0 + lift);
+            col += iridescent * fresnel * 0.5 * layerFade;
+            col += baseCol * 0.06 * layerFade;
+            col += reflCol * fresnel * 0.3 * layerFade;
+            col += specCol * 1.2 * layerFade;
+
+            // Step through entire current object before looking for the next
+            t += 0.3;
+            for (int skip = 0; skip < 16; skip++) {
+              if (sceneSDF(ro + t*rd) > 0.05) break;
+              t += 0.08;
+            }
+          }
+
+          // Soft glow for rays that missed entirely
+          if (layers == 0) {
+            float glow = exp(-closestDist * 4.0) * 0.25;
+            if (glow > 0.005) {
+              vec3 gc = glowColor(closestPos);
+              col += gc * glow;
+            }
+          }
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -233,13 +402,17 @@
 
     // ---- Scroll ----
     const JOURNEY_WINDOW = 0.06;
+    const CYCLE_SEC = 25;
     let scrollPos = 0, maxScroll = 1.0 - JOURNEY_WINDOW;
+    let manualScroll = false, manualTimer = 0;
 
     window.addEventListener('wheel', e => {
       e.preventDefault();
       scrollPos += e.deltaY * 0.0004;
       scrollPos = Math.max(0, Math.min(scrollPos, maxScroll));
       uniforms.uScroll.value = scrollPos;
+      manualScroll = true;
+      manualTimer = 3.0;
     }, { passive: false });
 
     // ---- Resolution (device pixels) ----
@@ -255,6 +428,7 @@
     const MOUSE_PUSH = 2.0;
     const DRIFT_SPEED = 2.50;
     let simTime = 0, last = performance.now();
+    let fissionTimer = 12;
 
     function animate() {
       requestAnimationFrame(animate);
@@ -264,6 +438,17 @@
 
       simTime += dt * DRIFT_SPEED;
       uniforms.uTime.value = simTime;
+
+      // Auto-scroll journey (pauses briefly after manual scroll)
+      if (manualScroll) {
+        manualTimer -= dt;
+        if (manualTimer <= 0) manualScroll = false;
+      }
+      if (!manualScroll) {
+        scrollPos += dt / CYCLE_SEC * maxScroll;
+        if (scrollPos > maxScroll) scrollPos -= maxScroll;
+        uniforms.uScroll.value = scrollPos;
+      }
 
       const wx = wallX(), wy = wallY();
 
@@ -282,81 +467,196 @@
       const maxMV = 2.0;
       if (mspeed > maxMV) { mouse.vx *= maxMV / mspeed; mouse.vy *= maxMV / mspeed; }
 
+      // #2 Fission: occasionally split a large ball into two
+      fissionTimer -= dt;
+      if (fissionTimer <= 0 && balls.length < MAX - 2) {
+        let maxR = 0, maxIdx = 0;
+        for (let k = 0; k < balls.length; k++) {
+          if (balls[k].r > maxR) { maxR = balls[k].r; maxIdx = k; }
+        }
+        const parent = balls[maxIdx];
+        if (parent.r > 0.14) {
+          const child = makeBall();
+          child.x = parent.x; child.y = parent.y; child.z = parent.z;
+          child.r = parent.r * 0.55;
+          parent.r *= 0.65;
+          const splitAngle = Math.atan2(parent.vy, parent.vx) + Math.PI * 0.5;
+          child.vx = Math.cos(splitAngle) * 1.2;
+          child.vy = Math.sin(splitAngle) * 1.2;
+          parent.vx += -Math.cos(splitAngle) * 0.6;
+          parent.vy += -Math.sin(splitAngle) * 0.6;
+          balls.push(child);
+        }
+        fissionTimer = 15 + Math.sin(simTime * 0.3) * 5;
+      }
+
       for (let i = 0; i < balls.length; i++) {
         const b = balls[i];
+        const sticking = b.wallStick > 0;
 
-        // Smooth steering via sin — each ball has unique phase
-        const steerAngle = Math.sin(simTime * 0.3 * b.pf + b.pp) * 0.8;
-        const cs = Math.cos(steerAngle * dt), sn = Math.sin(steerAngle * dt);
-        const nvx = b.vx * cs - b.vy * sn;
-        const nvy = b.vx * sn + b.vy * cs;
-        b.vx = nvx; b.vy = nvy;
+        if (!sticking) {
+          const steerAngle = Math.sin(simTime * 0.3 * b.pf + b.pp) * 0.8;
+          const cs = Math.cos(steerAngle * dt), sn = Math.sin(steerAngle * dt);
+          const nvx = b.vx * cs - b.vy * sn;
+          const nvy = b.vx * sn + b.vy * cs;
+          b.vx = nvx; b.vy = nvy;
+          // Z-axis drift via slow noise
+          const zSteer = Math.sin(simTime * 0.2 * b.pf + b.pp * 1.7) * 0.4;
+          b.vz += (zSteer - b.vz) * Math.min(2.0 * dt, 1.0);
 
-        // Speed governor — only kicks in at extremes, never fights small changes
-        const curSpd = Math.hypot(b.vx, b.vy);
-        const baseSpd = 0.8 + b.r * 0.5;
-        const minSpd = baseSpd * 0.3, maxSpd = baseSpd * 3.0;
-        if (curSpd < minSpd && curSpd > 0.01) {
-          b.vx *= minSpd / curSpd; b.vy *= minSpd / curSpd;
-        } else if (curSpd > maxSpd) {
-          b.vx *= maxSpd / curSpd; b.vy *= maxSpd / curSpd;
+          // Multi-frequency speed modulation — each ball has its own rhythm
+          const s1 = Math.sin(simTime * b.sf1 + b.sp1);
+          const s2 = Math.sin(simTime * b.sf2 + b.sp2);
+          const s3 = Math.sin(simTime * b.sf3 + b.sp3);
+          const speedMod = 1.0 + b.samp * (s1 * s2 + s3 * 0.3);
+          const curSpd = Math.hypot(b.vx, b.vy);
+          const baseSpd = (0.8 + b.r * 0.5) * Math.max(speedMod, 0.15);
+          const targetSpd = baseSpd;
+          const adj = 1.0 + (targetSpd / Math.max(curSpd, 0.01) - 1.0) * Math.min(3.0 * dt, 1.0);
+          b.vx *= adj; b.vy *= adj;
         }
 
-        // Ball-to-ball repulsion — wide and firm
+        // Ball-to-ball interaction — repulsion + occasional attraction pulses
         for (let j = i + 1; j < balls.length; j++) {
           const o = balls[j];
-          const dx = o.x - b.x, dy = o.y - b.y;
-          const d = Math.sqrt(dx * dx + dy * dy + 0.01);
-          const pushDist = (b.r + o.r) * 4.0;
-          if (d < pushDist) {
-            const t = 1.0 - d / pushDist;
-            const push = 4.0 * t * t / d;
-            b.vx -= dx * push * dt; b.vy -= dy * push * dt;
-            o.vx += dx * push * dt; o.vy += dy * push * dt;
+          const dx = o.x - b.x, dy = o.y - b.y, dz = o.z - b.z;
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz + 0.001);
+          const rSum = b.r + o.r;
+          const coreDist = rSum * 0.8;
+          const envDist  = rSum * 2.5;
+
+          // #1 Attraction pulse: pair-specific noise crosses threshold
+          const pairSeed = i * 31.0 + j * 17.0;
+          const attr = Math.sin(simTime * 0.12 + pairSeed) * Math.sin(simTime * 0.08 + pairSeed * 0.7);
+          const attracting = attr > 0.75;
+
+          let push = 0;
+          if (d < coreDist) {
+            const t = 1.0 - d / coreDist;
+            push = 6.0 * t * t / d;
+          } else if (d < envDist) {
+            const t = 1.0 - (d - coreDist) / (envDist - coreDist);
+            push = attracting ? -0.9 * t / d : 0.6 * t / d;
+          }
+          if (push !== 0) {
+            if (!sticking) { b.vx -= dx * push * dt; b.vy -= dy * push * dt; b.vz -= dz * push * dt; }
+            if (o.wallStick <= 0) { o.vx += dx * push * dt; o.vy += dy * push * dt; o.vz += dz * push * dt; }
           }
         }
 
         // Mouse disturbance
-        if (mouse.inside) {
+        if (mouse.inside && !sticking) {
           const dx = b.x - mouse.x, dy = b.y - mouse.y;
           const infl = Math.exp(-(dx * dx + dy * dy) / 0.5);
           b.vx += mouse.vx * infl * MOUSE_PUSH * dt;
           b.vy += mouse.vy * infl * MOUSE_PUSH * dt;
         }
 
-        // Uniform movement — no position-based speed change
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-
-        // Wall bounce
         const bx = wx - b.r * 0.5;
         const by = wy - b.r * 0.5;
-        if (b.x > bx) { b.x = bx; b.vx = -Math.abs(b.vx); }
-        if (b.x < -bx) { b.x = -bx; b.vx = Math.abs(b.vx); }
-        if (b.y > by) { b.y = by; b.vy = -Math.abs(b.vy); }
-        if (b.y < -by) { b.y = -by; b.vy = Math.abs(b.vy); }
 
-        const spd = Math.hypot(b.vx, b.vy);
-        // Smooth stretch tracking (no jitter — exponential ease)
+        const wallZ = 0.35;
+        if (!sticking) {
+          b.x += b.vx * dt;
+          b.y += b.vy * dt;
+          b.z += b.vz * dt;
+          if (b.z > wallZ) { b.z = wallZ; b.vz *= -0.5; }
+          else if (b.z < -wallZ) { b.z = -wallZ; b.vz *= -0.5; }
+
+          let hitWall = false, impactSpd = 0;
+          if (b.x > bx) {
+            b.x = bx; impactSpd = b.preSpeed = Math.hypot(b.vx, b.vy); hitWall = true;
+            b.wallTanV = b.vy; b.wallDirX = -1; b.wallDirY = 0;
+            b.vx = 0; b.wallStick = 0.7;
+            b.sqX = 1.0; b.sqY = 1.0; b.sqVx = 0; b.sqVy = 0;
+          } else if (b.x < -bx) {
+            b.x = -bx; impactSpd = b.preSpeed = Math.hypot(b.vx, b.vy); hitWall = true;
+            b.wallTanV = b.vy; b.wallDirX = 1; b.wallDirY = 0;
+            b.vx = 0; b.wallStick = 0.7;
+            b.sqX = 1.0; b.sqY = 1.0; b.sqVx = 0; b.sqVy = 0;
+          } else if (b.y > by) {
+            b.y = by; impactSpd = b.preSpeed = Math.hypot(b.vx, b.vy); hitWall = true;
+            b.wallTanV = b.vx; b.wallDirX = 0; b.wallDirY = -1;
+            b.vy = 0; b.wallStick = 0.7;
+            b.sqX = 1.0; b.sqY = 1.0; b.sqVx = 0; b.sqVy = 0;
+          } else if (b.y < -by) {
+            b.y = -by; impactSpd = b.preSpeed = Math.hypot(b.vx, b.vy); hitWall = true;
+            b.wallTanV = b.vx; b.wallDirX = 0; b.wallDirY = 1;
+            b.vy = 0; b.wallStick = 0.7;
+            b.sqX = 1.0; b.sqY = 1.0; b.sqVx = 0; b.sqVy = 0;
+          }
+
+          // #3 Chain reaction: wall impact pushes nearby balls
+          if (hitWall && impactSpd > 0.5) {
+            for (let j = 0; j < balls.length; j++) {
+              if (j === i) continue;
+              const o = balls[j];
+              const cdx = o.x - b.x, cdy = o.y - b.y;
+              const cd = Math.hypot(cdx, cdy);
+              if (cd < 1.2 && cd > 0.01) {
+                const impulse = (1.0 - cd / 1.2) * impactSpd * 0.35;
+                o.vx += (cdx / cd) * impulse;
+                o.vy += (cdy / cd) * impulse;
+              }
+            }
+          }
+        } else {
+          b.wallStick -= dt;
+          if (b.wallDirX !== 0) b.y += b.wallTanV * dt * 0.5;
+          else b.x += b.wallTanV * dt * 0.5;
+          b.wallTanV *= (1.0 - dt);
+
+          const prog = 1.0 - Math.max(b.wallStick, 0) / 0.7;
+          const eased = prog * prog;
+          const peakSq = 0.12 + Math.min(b.preSpeed * 0.06, 0.18);
+          const sq = 1.0 + eased * peakSq;
+          if (b.wallDirX !== 0) { b.sqX = sq; b.sqY = 1.0 / sq; }
+          else { b.sqY = sq; b.sqX = 1.0 / sq; }
+
+          b.x = Math.max(-bx, Math.min(bx, b.x));
+          b.y = Math.max(-by, Math.min(by, b.y));
+
+          if (b.wallStick <= 0) {
+            b.wallStick = 0;
+            const cx = -b.x, cy = -b.y;
+            const clen = Math.hypot(cx, cy) + 0.01;
+            const launchSpd = Math.max(b.preSpeed * 0.5, 0.4);
+            b.vx = (b.wallDirX * 0.3 + cx / clen * 0.4) * launchSpd;
+            b.vy = (b.wallDirY * 0.3 + cy / clen * 0.4) * launchSpd;
+            b.sqVx = 0; b.sqVy = 0;
+          }
+        }
+
+        if (b.wallStick <= 0) {
+          b.sqX += (1.0 - b.sqX) * Math.min(14.0 * dt, 1.0);
+          b.sqY += (1.0 - b.sqY) * Math.min(14.0 * dt, 1.0);
+        }
+
+        const spd = Math.hypot(b.vx, b.vy, b.vz);
         const targetStretch = 1.0 + Math.min(spd * 0.25, 0.5);
         b.stretch = b.stretch || 1.0;
         b.stretch += (targetStretch - b.stretch) * Math.min(3.0 * dt, 1.0);
 
         centers[i].set(b.x, b.y);
         const pulse = 0.88 + 0.12 * Math.sin(simTime * b.pf + b.pp);
-        radii[i] = b.r * pulse * b.life * b.stretch;
+        const rScale = Math.min(window.innerWidth / window.innerHeight, 1.0);
+        radii[i] = b.r * pulse * b.life * b.stretch * (0.4 + rScale * 0.6);
         hueArr[i] = b.hue;
         uniforms.uSpeed.value[i] = spd;
+        squashArr[i].set(b.sqX, b.sqY);
+        uniforms.uZ.value[i] = b.z;
       }
 
-      for (let i = balls.length; i < MAX; i++) radii[i] = 0;
+      for (let i = balls.length; i < MAX; i++) { radii[i] = 0; uniforms.uZ.value[i] = 0; }
 
       // Mouse ball
       const mi = balls.length;
       centers[mi].set(mouse.x, mouse.y);
+      uniforms.uZ.value[mi] = 0;
       radii[mi] = mouse.inside ? (0.05 + Math.min(mspeed * 0.05, 0.5)) : 0.0;
       hueArr[mi] = 0.08;
       uniforms.uSpeed.value[mi] = mspeed;
+      squashArr[mi].set(1.0, 1.0);
 
       uniforms.uCount.value = balls.length + 1;
       renderer.render(scene, camera);
