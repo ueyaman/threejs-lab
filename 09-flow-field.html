@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 - Flow Field | Three.js Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+    #back {
+      position: fixed; top: 1rem; left: 1rem; z-index: 10;
+      color: #7cf; font-size: 0.85rem; text-decoration: none;
+      font-family: monospace;
+      background: rgba(0,0,0,0.5); padding: 0.3rem 0.6rem;
+      border-radius: 4px; border: 1px solid #333;
+    }
+    #back:hover { border-color: #7cf; }
+  </style>
+</head>
+<body>
+  <a id="back" href="index.html">← 一覧へ</a>
+  <video id="bgVideo" src="docs/260719/bg-flow.mp4"
+         autoplay muted loop playsinline
+         style="display:none"></video>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    const N = 24000;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(1);
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    // ---- Noise (2D simplex-ish via sin hash) ----
+    function hash2(x, y) {
+      const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+      return s - Math.floor(s);
+    }
+    function noise2(x, y) {
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+      const a = hash2(ix, iy), b = hash2(ix + 1, iy);
+      const c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+      return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+    }
+    function fbm(x, y) {
+      let v = 0, a = 0.5;
+      for (let i = 0; i < 4; i++) {
+        v += a * noise2(x, y);
+        x = x * 2.0 + 1.7; y = y * 2.0 + 3.1;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    // ---- Particles ----
+    const aspect = window.innerWidth / window.innerHeight;
+    const positions = new Float32Array(N * 3);
+    const alphas = new Float32Array(N);
+    const sizes = new Float32Array(N);
+    const warmth = new Float32Array(N);
+
+    const px = new Float32Array(N);
+    const py = new Float32Array(N);
+    const vx = new Float32Array(N);
+    const vy = new Float32Array(N);
+    const life = new Float32Array(N);
+    const maxLife = new Float32Array(N);
+
+    function spawnParticle(i) {
+      px[i] = (Math.random() * 2 - 1) * aspect;
+      py[i] = Math.random() * 2 - 1;
+      vx[i] = 0; vy[i] = 0;
+      maxLife[i] = 3 + Math.random() * 8;
+      life[i] = maxLife[i];
+      sizes[i] = 0.5 + Math.random() * 0.8;
+      warmth[i] = 0;
+    }
+
+    for (let i = 0; i < N; i++) {
+      spawnParticle(i);
+      life[i] = Math.random() * maxLife[i];
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aWarmth', new THREE.BufferAttribute(warmth, 1));
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+        uTime: { value: 0 },
+      },
+      vertexShader: `
+        attribute float aAlpha;
+        attribute float aSize;
+        attribute float aWarmth;
+        varying float vAlpha;
+        varying float vWarmth;
+        uniform vec2 uResolution;
+        void main() {
+          vAlpha = aAlpha;
+          vWarmth = aWarmth;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize * uResolution.y * 0.008;
+        }
+      `,
+      fragmentShader: `
+        varying float vAlpha;
+        varying float vWarmth;
+        uniform float uTime;
+        void main() {
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          if (d > 1.0) discard;
+          float soft = 1.0 - d * d;
+          float alpha = soft * soft * vAlpha * 0.35;
+          vec3 cool = vec3(0.6, 0.8, 1.0);
+          vec3 warm = vec3(1.0, 0.55, 0.1);
+          vec3 col = mix(cool, warm, vWarmth);
+          alpha *= 1.0 + vWarmth * 0.5;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    // ---- Organic background: mizu → navy → black, slowly breathing ----
+    const bgMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uAspect: { value: 1 },
+        uBgTex: { value: null },
+        uHasVideo: { value: 0.0 },
+        uVideoAspect: { value: 16 / 9 },
+        uDark: { value: 0.0 },
+        uVideoAlpha: { value: 1.0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = position.xy * 0.5 + 0.5;
+          gl_Position = vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uAspect;
+
+        float hash21(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(hash21(i), hash21(i + vec2(1,0)), f.x),
+            mix(hash21(i + vec2(0,1)), hash21(i + vec2(1,1)), f.x), f.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0, a = 0.5;
+          for (int i = 0; i < 4; i++) { v += a * vnoise(p); p = p * 2.0 + 1.7; a *= 0.5; }
+          return v;
+        }
+
+        uniform sampler2D uBgTex;
+        uniform float uHasVideo;
+        uniform float uVideoAspect;
+        uniform float uDark;
+        uniform float uVideoAlpha;
+
+        void main() {
+          vec3 col;
+          if (uHasVideo > 0.5) {
+            // cover-fit UV: crop whichever axis overflows
+            vec2 uv = vUv;
+            if (uAspect > uVideoAspect) {
+              uv.y = 0.5 + (vUv.y - 0.5) * (uVideoAspect / uAspect);
+            } else {
+              uv.x = 0.5 + (vUv.x - 0.5) * (uAspect / uVideoAspect);
+            }
+            // soft 3x3 blur
+            vec3 v = vec3(0.0);
+            for (int bx = -1; bx <= 1; bx++) {
+              for (int by = -1; by <= 1; by++) {
+                vec2 off = vec2(float(bx), float(by)) * 0.012;
+                v += texture2D(uBgTex, clamp(uv + off, 0.0, 1.0)).rgb;
+              }
+            }
+            v /= 9.0;
+            // de-haze: crush the lifted black point of underwater footage,
+            // then re-saturate what remains
+            v = clamp((v - 0.12) / 0.88, 0.0, 1.0);
+            // remove yellow cast: subtract the amount R and G jointly
+            // exceed B (blues, cyans and whites are untouched)
+            float yel = max(0.0, min(v.r, v.g) - v.b);
+            v.r -= yel; v.g -= yel;
+            float luma = dot(v, vec3(0.299, 0.587, 0.114));
+            v = mix(vec3(luma), v, 1.7);
+            // full-strength video (no alpha darkening) + mizu veil
+            col = pow(v, vec3(1.4));
+            col = mix(col, vec3(0.220, 0.480, 0.640), 0.25);
+          }
+
+          // procedural deep-sea base (always computed)
+          {
+            vec2 p = vec2(vUv.x * uAspect, vUv.y);
+            float t = uTime * 0.02;
+            float n1 = fbm(p * 1.6 + vec2(t, -t * 0.7));
+            float n2 = fbm(p * 3.2 + vec2(-t * 0.6, t * 0.9) + 7.3);
+            float depth = n1 * 0.72 + n2 * 0.28;
+
+            vec3 black = vec3(0.000, 0.004, 0.015);
+            vec3 navy  = vec3(0.015, 0.045, 0.150);
+            vec3 mizu  = vec3(0.180, 0.420, 0.560);
+
+            vec3 proc = mix(black, navy, smoothstep(0.28, 0.62, depth));
+            proc = mix(proc, mizu, smoothstep(0.66, 0.90, depth) * 0.55);
+
+            float va = uHasVideo > 0.5 ? uVideoAlpha : 0.0;
+            col = mix(proc, col, va);
+          }
+
+          col *= max(mix(1.0, 0.45, uDark), 0.02);
+
+          // gentle vignette so edges sink into darkness
+          vec2 c = vUv - 0.5;
+          col *= 1.0 - dot(c, c) * 0.9;
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMaterial);
+    bgMesh.renderOrder = -1;
+    bgMesh.frustumCulled = false;
+    scene.add(bgMesh);
+
+    const points = new THREE.Points(geometry, material);
+    points.renderOrder = 1;
+    scene.add(points);
+
+    // Video background (falls back to the procedural shader if unavailable)
+    const videoEl = document.getElementById('bgVideo');
+    function initVideoTex() {
+      if (bgMaterial.uniforms.uHasVideo.value > 0) return;
+      const vTex = new THREE.VideoTexture(videoEl);
+      vTex.minFilter = THREE.LinearFilter;
+      vTex.magFilter = THREE.LinearFilter;
+      bgMaterial.uniforms.uBgTex.value = vTex;
+      bgMaterial.uniforms.uVideoAspect.value = videoEl.videoWidth / videoEl.videoHeight || 16 / 9;
+      bgMaterial.uniforms.uHasVideo.value = 1.0;
+    }
+    videoEl.addEventListener('loadeddata', () => {
+      initVideoTex();
+      videoEl.play().catch(() => {});
+    });
+    if (videoEl.readyState >= 2) {
+      initVideoTex();
+      videoEl.play().catch(() => {});
+    }
+    document.addEventListener('click', () => {
+      if (videoEl.paused) videoEl.play().catch(() => {});
+    }, { once: true });
+
+    // ---- Mouse ----
+    const mouse = { x: 0, y: 0, active: false };
+    function toField(cx, cy) {
+      return [
+        (cx / window.innerWidth * 2 - 1) * aspect,
+        -(cy / window.innerHeight * 2 - 1)
+      ];
+    }
+    window.addEventListener('pointermove', e => {
+      [mouse.x, mouse.y] = toField(e.clientX, e.clientY);
+      mouse.active = true;
+    });
+    window.addEventListener('pointerleave', () => { mouse.active = false; });
+
+    // ---- Resize ----
+    function onResize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      material.uniforms.uResolution.value.set(w, h);
+      bgMaterial.uniforms.uAspect.value = w / h;
+      const a = w / h;
+      camera.left = -a; camera.right = a;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onResize);
+    onResize();
+
+    // ---- Animation ----
+    const FIELD_SCALE = 1.5;
+    const FIELD_SPEED = 0.8;
+    const FLOW_FORCE = 1.5;
+    const DAMPING = 0.96;
+    let time = 0, last = performance.now();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      time += dt;
+      material.uniforms.uTime.value = time;
+      bgMaterial.uniforms.uTime.value = time;
+
+      const asp = window.innerWidth / window.innerHeight;
+      // Oscillating time with sharp acceleration / gentle deceleration
+      const cycle = 10;
+      const phase = (time % (cycle * 2)) / (cycle * 2);
+      const eased = phase < 0.5
+        ? Math.pow(phase * 2, 3.0) * 0.5
+        : 1.0 - Math.pow((1.0 - phase) * 2, 3.0) * 0.5;
+      const t = Math.sin(eased * Math.PI * 2) * cycle * FIELD_SPEED;
+
+      for (let i = 0; i < N; i++) {
+        // Flow field: noise → angle
+        const nx = px[i] * FIELD_SCALE;
+        const ny = py[i] * FIELD_SCALE;
+        const twist = Math.sin(t * 0.3) * 0.5;
+        const angle = fbm(nx + t, ny + t * 0.7 + twist) * Math.PI * 4
+                    + fbm(nx * 0.5 - t * 0.6, ny * 0.5 + t * 0.4) * Math.PI * 2;
+
+        // Flow force with surge/lull rhythm
+        const surge = 0.4 + 1.8 * Math.pow(Math.abs(Math.sin(time * 0.5)), 2.0);
+        vx[i] += Math.cos(angle) * FLOW_FORCE * surge * dt;
+        vy[i] += Math.sin(angle) * FLOW_FORCE * surge * dt;
+
+        // Mouse interaction: gentle push
+        if (mouse.active) {
+          const dx = px[i] - mouse.x, dy = py[i] - mouse.y;
+          const d2 = dx * dx + dy * dy + 0.01;
+          if (d2 < 0.5) {
+            const f = 0.3 / d2;
+            vx[i] += dx * f * dt;
+            vy[i] += dy * f * dt;
+          }
+        }
+
+        vx[i] *= DAMPING;
+        vy[i] *= DAMPING;
+        px[i] += vx[i] * dt;
+        py[i] += vy[i] * dt;
+
+        // Wrap at edges
+        if (px[i] > asp + 0.1) px[i] -= asp * 2 + 0.2;
+        else if (px[i] < -asp - 0.1) px[i] += asp * 2 + 0.2;
+        if (py[i] > 1.1) py[i] -= 2.2;
+        else if (py[i] < -1.1) py[i] += 2.2;
+
+        // Life
+        life[i] -= dt;
+        if (life[i] <= 0) spawnParticle(i);
+
+        // Fade in/out
+        const lt = life[i] / maxLife[i];
+        const fade = Math.min(lt * 5, 1) * Math.min((1 - lt) * 3, 1);
+
+        // Speed → brightness + warmth
+        const spd = Math.hypot(vx[i], vy[i]);
+        const bright = 0.5 + Math.min(spd * 2, 1.5);
+        warmth[i] = Math.pow(Math.min(spd * 1.0, 1.0), 1.3);
+
+        alphas[i] = fade * bright;
+        positions[i * 3] = px[i];
+        positions[i * 3 + 1] = py[i];
+        positions[i * 3 + 2] = 0;
+      }
+
+      geometry.attributes.position.needsUpdate = true;
+      geometry.attributes.aAlpha.needsUpdate = true;
+      geometry.attributes.aWarmth.needsUpdate = true;
+
+      const toneDiff = toneTarget - toneCurrent;
+      if (Math.abs(toneDiff) < 0.01) {
+        pickToneTarget();
+      } else {
+        toneCurrent += Math.sign(toneDiff) * toneSpeed * dt;
+      }
+      bgMaterial.uniforms.uDark.value = toneCurrent;
+
+      // Video alpha random walk
+      const vaDiff = vaTarget - vaCurrent;
+      if (Math.abs(vaDiff) < 0.01) {
+        pickVaTarget();
+      } else {
+        vaCurrent += Math.sign(vaDiff) * vaSpeed * dt;
+      }
+      bgMaterial.uniforms.uVideoAlpha.value = vaCurrent;
+
+      renderer.render(scene, camera);
+    }
+
+    let toneCurrent = 0;
+    let toneTarget = 0;
+    let toneSpeed = 0.05;
+    function pickToneTarget() {
+      toneTarget = Math.random() * 2.0;
+      toneSpeed = 0.02 + Math.random() * 0.08;
+    }
+    pickToneTarget();
+
+    let vaCurrent = 1.0;
+    let vaTarget = 1.0;
+    let vaSpeed = 0.04;
+    function pickVaTarget() {
+      vaTarget = 0.15 + Math.random() * 0.85;
+      vaSpeed = 0.015 + Math.random() * 0.06;
+    }
+    pickVaTarget();
+
+    animate();
+  </script>
+</body>
+</html>

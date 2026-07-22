@@ -66,3 +66,8 @@ report-*.png
 # 07 verification screenshots / exported PNGs (throwaway)
 07-*.png
 street_*.png
+
+# 09 verification screenshots / scratch frames (throwaway)
+flow-*.png
+flow-*.raw
+scratch-bgframe.png
