@@ -1019,3 +1019,12 @@
 - 拍イベント（lastKick 等の時刻 + 減衰 exp）を audio 側（Tone.Draw）と無音側
   （wall-clock 8分解像度）の両方から書ける構造にすると、音なしでも絵が同期し、
   音源の将来差し替え（Suno 曲・自作ワンショット）も uBeat の供給源交換だけで済む。
+
+### スマホの音声解錠は pointerdown だけでは不十分
+- iOS Safari は pointerdown をユーザー操作と認めないことがある（activation は
+  touchend / click で立つ）。解錠リスナーは pointerdown + touchend + click +
+  keydown の多重掛けにし、state.audio ガードで冪等化する。
+- iPhone のマナーモード（消音スイッチ）中は WebAudio がカテゴリごと黙る。
+  ジェスチャ内で無音 <audio>（data URI wav）をループ再生してセッションを
+  playback 化 + Safari 17+ は navigator.audioSession.type='playback' を併用。
+  この呼び出しは await Tone.start() の「前」（ジェスチャ文脈内）に置くのが必須。

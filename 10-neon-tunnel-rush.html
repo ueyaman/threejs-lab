@@ -379,8 +379,21 @@ function buildAudio() {
    保留のまま残る。ここでロックを握るとクリック時の再試行を
    弾いて永久に音が出ないため、ガードは state.audio のみにする
    （多重解決は await 後の同期区間で安全に潰れる）。 */
+// iOS 対策: マナーモード（消音スイッチ）中は WebAudio がカテゴリごと黙るため、
+// ジェスチャ内で無音の <audio> ループを再生してオーディオセッションを
+// playback 化する（Safari 17+ は audioSession API も併用）
+const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+let unmuteEl = null;
+function primeMobileAudio() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    if (!unmuteEl) { unmuteEl = new Audio(SILENT_WAV); unmuteEl.loop = true; }
+    unmuteEl.play().catch(() => {});
+  } catch (err) { /* 非対応環境は無視 */ }
+}
 async function unlockAudio() {
   if (state.audio) return;
+  primeMobileAudio();               // await の前 = ジェスチャ文脈内で実行が必須
   try { await Tone.start(); } catch (err) { return; }
   if (state.audio) return;
   buildAudio();
@@ -404,7 +417,11 @@ async function unlockAudio() {
   if (h) h.style.display = 'none';
 }
 unlockAudio();   // 自動再生が許可されている環境ならそのまま鳴る
+// iOS は pointerdown がユーザー操作と認められないことがあるため
+// touchend / click でも解錠を試みる（多重呼び出しは state.audio ガードで無害）
 window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('touchend', unlockAudio);
+window.addEventListener('click', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
 
 window.addEventListener('keydown', (e) => {
