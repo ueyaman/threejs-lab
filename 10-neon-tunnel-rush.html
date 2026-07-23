@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 — Neon Tunnel Rush | Three.js Lab</title>
+<link rel="icon" href="data:,">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #04050a; }
+  canvas { display: block; }
+  #count {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+    font-family: "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
+    color: #bfe9ff;
+  }
+  #count span {
+    font-size: clamp(7rem, 34vmin, 18rem); font-weight: 700; line-height: 1;
+    text-shadow:
+      0 0 30px rgba(119,204,255,0.9), 0 0 90px rgba(68,136,255,0.5),
+      -5px 0 0 rgba(255,60,90,0.5), 5px 0 0 rgba(60,160,255,0.5);
+  }
+  #count span.pop { animation: pop 0.42s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+  @keyframes pop {
+    0%   { transform: scale(1.7); opacity: 0; }
+    18%  { opacity: 1; }
+    100% { transform: scale(0.92); opacity: 0.85; }
+  }
+  .hud {
+    position: fixed; z-index: 5; color: rgba(180,200,220,0.5);
+    font-family: "SF Mono", Consolas, monospace; font-size: 0.66rem; letter-spacing: 0.12em;
+    pointer-events: none;
+  }
+  .hud.tl { left: 14px; bottom: 12px; }
+  .hud.br { right: 14px; bottom: 12px; text-align: right; }
+  .hud.bc { left: 50%; transform: translateX(-50%); bottom: 34px; }
+  @media (max-width: 640px) { .hud.br { display: none; } }
+</style>
+<!-- Tone.js は UMD グローバル読み（importmap の three と共存） -->
+<script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.js"></script>
+<script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="count"><span id="countNum"></span></div>
+<div class="hud tl">10 — neon tunnel rush ・ three.js lab</div>
+<div class="hud br">mouse: steer ・ wheel: speed ・ T: turbo ・ M: mute</div>
+<div class="hud bc" id="sndhint">&#128263; click / tap — sound on</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* =========================================================
+   BeatClock 状態 — 音源非依存。音が無くても同じ進行で走り、
+   Tone.Transport 稼働後は Tone.Draw がここを上書きする。
+   beat 0 = カウントダウン明け。
+   ========================================================= */
+const BPM = 127;
+const BEATS_PER_SEC = BPM / 60;
+const BEAT_LEN = 60 / BPM;
+const COUNT_BEATS = 4;
+const SECTION_COUNT = 6;
+// セクション編成: 足し引きアレンジ（デトロイト流）。spd は映像速度倍率
+const ARR = [
+  { kick: 1, hat: 1, bass: 0, stab: 0, pad: 0, spd: 0.9  }, // 0 イントロ
+  { kick: 1, hat: 1, bass: 1, stab: 0, pad: 0, spd: 1.15 }, // 1 +ベース
+  { kick: 1, hat: 1, bass: 1, stab: 1, pad: 0, spd: 1.3  }, // 2 +スタブ
+  { kick: 1, hat: 1, bass: 1, stab: 1, pad: 1, spd: 1.45 }, // 3 フル
+  { kick: 0, hat: 1, bass: 0, stab: 1, pad: 1, spd: 0.6  }, // 4 ブレイクダウン
+  { kick: 1, hat: 1, bass: 1, stab: 1, pad: 1, spd: 1.7  }, // 5 ドロップ
+];
+
+/* ビート応答の重み付け — 全拍同一の反応は「ルール」として予測されて
+   退屈になるため、音楽的な位置で階層を付けつつ乱数で毎回変える。
+   マクロ(小節頭/ターンアラウンド/ビルドアップ)は構造、ミクロは揺らぎ。 */
+function kickWeight(beatInBar, barIn8) {
+  let w = 0.4 + Math.random()*0.25;                       // 通常拍は弱め+揺らぎ
+  if (beatInBar === 0) w += 0.3;                          // 小節頭は強い
+  if (barIn8 === 7) w += 0.25;                            // セクション最終小節=ビルドアップ
+  if (barIn8 % 4 === 3 && beatInBar === 3) w = 1.3;       // 4小節ごとのターンアラウンドの一撃
+  return Math.min(1.35, w);
+}
+function kickGlitchGate(beatInBar, barIn8) {
+  let p = 0.22;                                           // グリッチは確率ゲート
+  if (beatInBar === 0) p = 0.5;
+  if (barIn8 === 7) p = 0.75;                             // 切替前は破れが密になる
+  return Math.random() < p ? 1 : 0;
+}
+function hatOWeight(isBreakdown) {
+  const p = isBreakdown ? 0.9 : 0.4;                      // ブレイクダウンでは主役
+  return Math.random() < p ? 0.6 + Math.random()*0.5 : 0; // 0 = その裏打ちは休む
+}
+
+const state = {
+  audio: false, muted: false,
+  lastKick: -10, lastHat: -10, lastHatO: -10, lastStab: -10, lastBass: -10,
+  kickW: 1, hatOW: 1, glitch: 0,
+  turboStart: -10, turboDur: 0,
+  section: 0, flash: 0, seed: 0.37,
+};
+
+const bootT = performance.now() / 1000;
+const countStart = bootT + 0.5;
+const countEnd = countStart + COUNT_BEATS * BEAT_LEN;
+const silentStart = countEnd;   // beat 0 = カウント明け
+
+/* ---------- 無音フォールバッククロック（音声未解錠でも絵は同期） ---------- */
+let silentHalf = -1;
+function tickSilent(now) {
+  if (state.audio) return;
+  const tt = now - silentStart;
+  if (tt < 0) return;
+  const half = Math.floor(tt * BEATS_PER_SEC * 2);   // 8 分解像度（裏打ち用）
+  if (half === silentHalf) return;
+  silentHalf = half;
+  const beat = Math.floor(half / 2);
+  const offbeat = (half % 2) === 1;
+  const bar = Math.floor(beat / 4);
+  const sec = Math.floor(bar / 8) % SECTION_COUNT;
+  if (sec !== state.section) { state.section = sec; state.flash = 1; state.seed = Math.random(); }
+  const arr = ARR[state.section];
+  if (offbeat) {
+    if (arr.hat) {
+      const w = hatOWeight(!arr.kick);
+      if (w > 0) { state.lastHatO = now; state.hatOW = w; }
+    }
+    return;
+  }
+  if (arr.kick) {
+    state.lastKick = now;
+    state.kickW = kickWeight(beat % 4, bar % 8);
+    state.glitch = kickGlitchGate(beat % 4, bar % 8);
+    if (state.glitch > 0) state.seed = Math.random();
+    if (beat % 4 === 0) {          // 小節頭でターボ判定（無音時も同じ挙動）
+      const dropHead = state.section === 5 && bar % 8 === 0;
+      if (dropHead || Math.random() < 0.22) {
+        state.turboStart = now + BEAT_LEN*0.5;   // 裏拍相当の間を置いて加速
+        state.turboDur = (4 + Math.floor(Math.random()*5)) * BEAT_LEN;
+      }
+    }
+  }
+  state.lastHat = now;
+  if (arr.stab && beat % 8 === 6) state.lastStab = now;
+  if (arr.bass && beat % 2 === 0) state.lastBass = now;
+}
+
+/* ---------- カウントダウン（4→1、1 拍 = 1 数字） ---------- */
+const countEl = document.getElementById('count');
+const numEl = document.getElementById('countNum');
+let countShown = -1, countDone = false;
+function updateCount(now) {
+  if (countDone) return;
+  if (now < countStart) return;
+  if (now >= countEnd) {
+    countDone = true;
+    countEl.style.display = 'none';
+    state.flash = 1; state.seed = Math.random();   // 発進の一撃
+    return;
+  }
+  const idx = Math.floor((now - countStart) / BEAT_LEN);  // 0..3
+  if (idx !== countShown) {
+    countShown = idx;
+    numEl.textContent = String(COUNT_BEATS - idx);
+    numEl.classList.remove('pop'); void numEl.offsetWidth; numEl.classList.add('pop');
+    state.flash = Math.max(state.flash, 0.45);
+    countTick();   // 音声が生きていればカウント音
+  }
+}
+
+/* =========================================================
+   オーディオ — Tone.js デトロイトテクノ 5 トラック
+   kick / hats(+clap) / bass / minor9 stab / string pad
+   起動画面なし: ロード時に解錠を試行し、ダメなら最初の
+   クリック / キー入力で解錠（オートスタート方式）。
+   ========================================================= */
+let audioBuilt = false;
+let countTick = () => {};
+let manualTurbo = () => {   // T キー: 無音時はロール相当の間だけ置いて加速
+  state.turboStart = performance.now() / 1000 + 0.93;
+  state.turboDur = 6 * BEAT_LEN;
+};
+function buildAudio() {
+  if (audioBuilt) return;
+  audioBuilt = true;
+
+  Tone.Transport.bpm.value = BPM;
+  Tone.Transport.swing = 0.08;           // ファンク由来のスウィングが鍵
+  Tone.Transport.swingSubdivision = '16n';
+
+  // --- マスターチェーン: duck(サイドチェーン) → comp → limiter ---
+  const master = new Tone.Compressor(-18, 3);
+  const limiter = new Tone.Limiter(-1);
+  master.connect(limiter); limiter.toDestination();
+  const duck = new Tone.Gain(1); duck.connect(master);       // キック以外はここを通す
+  const verb = new Tone.Reverb({ decay: 2.8, wet: 0.28 });
+  if (verb.generate) verb.generate();
+  verb.connect(duck);
+
+  // --- kick: 909 風（サイン + ピッチスイープ）。duck を迂回 ---
+  const kick = new Tone.MembraneSynth({
+    pitchDecay: 0.045, octaves: 7, oscillator: { type: 'sine' },
+    envelope: { attack: 0.001, decay: 0.32, sustain: 0, release: 0.04 },
+  });
+  kick.volume.value = -4; kick.connect(master);
+
+  // --- hats: クローズ 16 分 + オープン裏拍（ノイズ合成、後で自作ワンショット差替え可） ---
+  const hatC = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.03, sustain: 0 } });
+  const hatHP = new Tone.Filter(9000, 'highpass');
+  hatC.volume.value = -18; hatC.connect(hatHP); hatHP.connect(duck);
+  const hatO = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.22, sustain: 0 } });
+  const hatOHP = new Tone.Filter(8000, 'highpass');
+  hatO.volume.value = -16; hatO.connect(hatOHP); hatOHP.connect(duck);
+  const clap = new Tone.NoiseSynth({ noise: { type: 'pink' }, envelope: { attack: 0.001, decay: 0.12, sustain: 0 } });
+  const clapBP = new Tone.Filter(1100, 'bandpass'); clapBP.Q.value = 1.4;
+  clap.volume.value = -14; clap.connect(clapBP); clapBP.connect(verb);
+
+  // --- カウントダウン用ティック ---
+  const tick = new Tone.MembraneSynth({
+    pitchDecay: 0.008, octaves: 2, oscillator: { type: 'sine' },
+    envelope: { attack: 0.001, decay: 0.08, sustain: 0 },
+  });
+  tick.volume.value = -10; tick.connect(master);
+  countTick = () => { if (state.audio) tick.triggerAttackRelease('A4', '16n'); };
+
+  // --- ターボの合図 = スタブ和音の一撃 ---
+  // 連打やノイズ合成より、既に音質が立っているスタブシンセの
+  // 大きいボイシング 1 発を合図にする。ダブディレイの残響が
+  // 加速中に尾を引き、一撃の余韻がそのまま疾走へ繋がる
+  function turboHit(time) {
+    stab.triggerAttackRelease(TURBO9, '4n', time, 1.0);
+    Tone.Draw.schedule(() => {
+      state.lastStab = nowSec();                  // 色の跳ね + 押し出しグライドも道連れ
+      state.flash = Math.max(state.flash, 0.5);
+    }, time);
+  }
+  manualTurbo = () => {   // T キー: 音付きで即発動（調整用ショートカット）
+    const time = Tone.now() + 0.02;
+    const durBeats = 4 + Math.floor(Math.random()*5);
+    turboHit(time);
+    Tone.Draw.schedule(() => {
+      state.turboStart = nowSec(); state.turboDur = durBeats * BEAT_LEN;
+    }, time);
+  };
+
+  // --- bass: シンコペーションの効いた Am リフ ---
+  const bass = new Tone.MonoSynth({
+    oscillator: { type: 'sawtooth' },
+    filter: { type: 'lowpass', Q: 1 },
+    filterEnvelope: { attack: 0.005, decay: 0.12, sustain: 0.3, release: 0.1, baseFrequency: 120, octaves: 2.2 },
+    envelope: { attack: 0.004, decay: 0.18, sustain: 0.25, release: 0.06 },
+  });
+  bass.volume.value = -8; bass.connect(duck);
+
+  // --- stab: マイナー9th（デトロイトの署名）+ ダブディレイ ---
+  const stab = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'sawtooth' },
+    envelope: { attack: 0.003, decay: 0.25, sustain: 0, release: 0.09 },
+  });
+  const stabLP = new Tone.Filter(2200, 'lowpass');
+  const stabDly = new Tone.FeedbackDelay('8n.', 0.34); stabDly.wet.value = 0.3;
+  stab.volume.value = -12; stab.connect(stabLP); stabLP.connect(stabDly); stabDly.connect(verb);
+
+  // --- pad: ストリングマシン風（遅いアタックのデチューン saw） ---
+  const pad = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'fatsawtooth', count: 3, spread: 22 },
+    envelope: { attack: 1.2, decay: 0.4, sustain: 0.8, release: 2.4 },
+  });
+  pad.volume.value = -17; pad.connect(verb);
+
+  const AM9 = ['A3', 'C4', 'E4', 'G4', 'B4'];
+  const TURBO9 = ['A2', 'E3', 'A3', 'C4', 'E4', 'G4', 'B4'];   // ターボ合図用の大きい Am9
+  const PAD_AM9 = ['A2', 'C4', 'E4', 'G4', 'B4'];
+  const PAD_FM9 = ['F2', 'A3', 'C4', 'E4', 'G4'];
+
+  const nowSec = () => performance.now() / 1000;
+  let arrNow = ARR[state.section];
+  let barsA = 0, secA = state.section;
+
+  // キック（4 つ打ち）+ サイドチェーン + uBeat
+  let kickIdx = 0;
+  new Tone.Loop((time) => {
+    const beatInBar = kickIdx % 4, barIn8 = Math.floor(kickIdx / 4) % 8;
+    kickIdx++;
+    if (!arrNow.kick) return;
+    kick.triggerAttackRelease('G1', '8n', time);
+    const g = duck.gain;
+    g.cancelScheduledValues(time);
+    g.setValueAtTime(g.value, time);
+    g.linearRampToValueAtTime(0.45, time + 0.015);   // ダッキング＝絵の uKick と同じ呼吸
+    g.linearRampToValueAtTime(1.0, time + 0.3);
+    const w = kickWeight(beatInBar, barIn8);
+    const gl = kickGlitchGate(beatInBar, barIn8);
+    Tone.Draw.schedule(() => {
+      state.lastKick = nowSec(); state.kickW = w; state.glitch = gl;
+      if (gl > 0) state.seed = Math.random();
+    }, time);
+  }, '4n').start(0);
+
+  // クローズハット 16 分（アクセントパターン）
+  const HAT_VEL = [1, 0.35, 0.65, 0.4, 0.9, 0.35, 0.65, 0.4, 1, 0.35, 0.65, 0.4, 0.9, 0.4, 0.7, 0.5];
+  let hatStep = 0;
+  new Tone.Loop((time) => {
+    if (!arrNow.hat) { hatStep++; return; }
+    const v = HAT_VEL[hatStep % 16]; hatStep++;
+    hatC.triggerAttackRelease('32n', time, v * 0.8);
+    Tone.Draw.schedule(() => { state.lastHat = nowSec(); }, time);
+  }, '16n').start(0);
+
+  // オープンハット裏拍
+  new Tone.Loop((time) => {
+    if (!arrNow.hat) return;
+    const tOff = time + Tone.Time('8n').toSeconds();
+    hatO.triggerAttackRelease('16n', tOff, 0.5);
+    const w = hatOWeight(!arrNow.kick);
+    if (w > 0) Tone.Draw.schedule(() => { state.lastHatO = nowSec(); state.hatOW = w; }, tOff);
+  }, '4n').start(0);
+
+  // クラップ 2・4 拍
+  const clapPart = new Tone.Part((time) => {
+    if (!arrNow.kick) return;   // ブレイクダウン中は休む
+    clap.triggerAttackRelease('16n', time, 0.7);
+  }, [['0:1:0'], ['0:3:0']]);
+  clapPart.loop = true; clapPart.loopEnd = '1m'; clapPart.start(0);
+
+  // ベース（16 分シーケンス・休符込みシンコペ）
+  const BASS_PAT = ['A1', null, null, 'A1', null, null, 'A2', null, null, 'A1', null, 'G1', null, 'C2', null, null];
+  new Tone.Sequence((time, note) => {
+    if (!arrNow.bass || note === null) return;
+    bass.triggerAttackRelease(note, '16n', time, 0.9);
+    Tone.Draw.schedule(() => { state.lastBass = nowSec(); }, time);
+  }, BASS_PAT, '16n').start(0);
+
+  // スタブ（2 小節ループ・オフビート 2 発）
+  const stabPart = new Tone.Part((time) => {
+    if (!arrNow.stab) return;
+    stab.triggerAttackRelease(AM9, '8n', time, 0.8);
+    Tone.Draw.schedule(() => { state.lastStab = nowSec(); }, time);
+  }, [['0:1:2'], ['1:2:3']]);
+  stabPart.loop = true; stabPart.loopEnd = '2m'; stabPart.start(0);
+
+  // パッド（8 小節で Am9 → Fmaj9）
+  const padPart = new Tone.Part((time, chord) => {
+    if (!arrNow.pad) return;
+    pad.triggerAttackRelease(chord, '4m', time, 0.6);
+  }, [['0:0:0', PAD_AM9], ['4:0:0', PAD_FM9]]);
+  padPart.loop = true; padPart.loopEnd = '8m'; padPart.start(0);
+
+  // セクション進行（8 小節ごと・ハードカット）
+  Tone.Transport.scheduleRepeat((time) => {
+    const barIdx = barsA;   // このコールバック = bar barIdx の頭（bar 0 でも発火する）
+    barsA++;
+    if (barIdx > 0 && barIdx % 8 === 0) {
+      secA = (secA + 1) % SECTION_COUNT;
+      arrNow = ARR[secA];
+      Tone.Draw.schedule(() => {
+        state.section = secA; state.flash = 1; state.seed = Math.random();
+      }, time);
+    }
+    // ターボ判定（小節頭）: ドロップ突入は必ず、他は確率で突如加速
+    const dropHead = secA === 5 && barIdx % 8 === 0;
+    if (arrNow.kick && (dropHead || Math.random() < 0.22)) {
+      const durBeats = 4 + Math.floor(Math.random()*5);
+      const tHit = time + Tone.Time('8n').toSeconds();  // 裏拍=キックのダッキングを避ける位置
+      turboHit(tHit);                                   // ジャーン、の一撃と同時に…
+      Tone.Draw.schedule(() => {                        // …加速が立ち上がる
+        state.turboStart = nowSec(); state.turboDur = durBeats * BEAT_LEN;
+      }, tHit);
+    }
+  }, '1m');
+
+  Tone.Destination.mute = state.muted;
+}
+
+/* ---------- 音声の自動解錠（起動画面なし） ----------
+   注意: ロード時の Tone.start() はジェスチャ前だと promise が
+   保留のまま残る。ここでロックを握るとクリック時の再試行を
+   弾いて永久に音が出ないため、ガードは state.audio のみにする
+   （多重解決は await 後の同期区間で安全に潰れる）。 */
+async function unlockAudio() {
+  if (state.audio) return;
+  try { await Tone.start(); } catch (err) { return; }
+  if (state.audio) return;
+  buildAudio();
+  // カウント明け前の解錠 → bar 0 の頭がカウント明けに一致するよう待つ。
+  // カウント明け後の解錠 → 無音クロックの「次の拍頭」に乗せて開始する
+  // （曲はパターン先頭から＝音楽的に自然、絵の拍グリッドとは一致して
+  //   継ぎ目がヨレない。Transport の途中位置開始は scheduleRepeat の
+  //   追い越し挙動が絡むため採らない）
+  const remain = countEnd - performance.now() / 1000;
+  let startDelay;
+  if (remain > 0.05) {
+    startDelay = remain;
+  } else {
+    startDelay = BEAT_LEN - ((-remain) % BEAT_LEN);
+    if (startDelay < 0.05) startDelay += BEAT_LEN;
+  }
+  Tone.Transport.start(`+${startDelay.toFixed(3)}`);
+  state.audio = true;
+  console.log('[10] audio unlocked');
+  const h = document.getElementById('sndhint');
+  if (h) h.style.display = 'none';
+}
+unlockAudio();   // 自動再生が許可されている環境ならそのまま鳴る
+window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'm' || e.key === 'M') {
+    state.muted = !state.muted;
+    if (window.Tone && audioBuilt) Tone.Destination.mute = state.muted;
+  }
+  if (e.key === 't' || e.key === 'T') manualTurbo();
+});
+
+/* =========================================================
+   ビジュアル — SDF レイマーチングトンネル（2 パス: scene → post）
+   マウス = ステアリング: トンネルが前方でカーソル方向に曲がり、
+   カメラは X 方向にバンク（ロール）する。
+   ========================================================= */
+const IS_MOBILE = matchMedia('(pointer: coarse)').matches || window.innerWidth < 820;
+const MARCH_STEPS = IS_MOBILE ? 48 : 72;   // モバイル GPU はステップ数と解像度を落とす
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, IS_MOBILE ? 1.0 : 1.5));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.PlaneGeometry(2, 2);
+
+const VERT = /* glsl */`
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+
+const sceneUniforms = {
+  uRes:     { value: new THREE.Vector2() },
+  uTime:    { value: 0 },
+  uTravel:  { value: 0 },
+  uKick:    { value: 0 },
+  uHat:     { value: 0 },
+  uHatO:    { value: 0 },
+  uStab:    { value: 0 },
+  uBass:    { value: 0 },
+  uSection: { value: 0 },
+  uFlash:   { value: 0 },
+  uTurbo:   { value: 0 },
+  uSteerV:  { value: new THREE.Vector2() },
+};
+
+const SCENE_FRAG = /* glsl */`
+  precision highp float;
+  varying vec2 vUv;
+  uniform vec2 uRes;
+  uniform vec2 uSteerV;
+  uniform float uTime, uTravel, uKick, uHat, uHatO, uStab, uBass, uSection, uFlash, uTurbo;
+
+  // トンネルの蛇行パス（z は 1 beat = 1 unit）
+  vec2 path(float z) {
+    return vec2(sin(z*0.25)*0.8 + sin(z*0.11)*0.65,
+                cos(z*0.20)*0.65 + cos(z*0.13)*0.45);
+  }
+  // ステアリング: カメラ前方 0→14 unit にかけてマウス方向へ曲げる
+  vec2 bend(float z) {
+    return uSteerV * (smoothstep(0.0, 14.0, z - uTravel) * 2.4);
+  }
+  vec2 pathT(float z) { return path(z) + bend(z); }
+
+  // セクションごとのネオン色
+  vec3 neonColor(float s) {
+    float m = mod(s, 4.0);
+    vec3 c = vec3(0.10, 0.70, 1.00);            // cyan
+    if (m >= 1.0 && m < 2.0) c = vec3(0.65, 0.30, 1.00); // violet
+    else if (m >= 2.0 && m < 3.0) c = vec3(1.00, 0.55, 0.15); // amber
+    else if (m >= 3.0) c = vec3(0.20, 1.00, 0.60); // mint
+    return c;
+  }
+  // トンネル SDF: セクションで断面が変わる（円 / 六角 / 星 / 角柱）
+  float map(vec3 p) {
+    vec2 q = p.xy - pathT(p.z);
+    float tw = p.z*0.22;                       // 断面が z 方向に捻れる（コークスクリュー）
+    float ctw = cos(tw), stw = sin(tw);
+    q = mat2(ctw, -stw, stw, ctw)*q;
+    float r = length(q);
+    float a = atan(q.y, q.x);
+    float R = 1.15 + uBass*0.10*sin(p.z*3.0 + uTime*2.0);  // ベースで半径が脈打つ
+    float m = mod(uSection, 4.0);
+    float wall;
+    if (m < 1.0) {
+      wall = R - r;
+    } else if (m < 2.0) {
+      float hr = max(abs(q.x)*0.866025 + abs(q.y)*0.5, abs(q.y));
+      wall = R - hr;
+    } else if (m < 3.0) {
+      float Rs = R*(0.82 + 0.18*cos(a*6.0 + p.z*0.8));
+      wall = Rs - r;
+    } else {
+      float sq = max(abs(q.x), abs(q.y));
+      wall = R*0.92 - sq;
+    }
+    wall += 0.035*sin(a*14.0)*sin(p.z*3.0);   // 壁のリブ
+    return wall;
+  }
+
+  void main() {
+    vec2 uv = vUv*2.0 - 1.0;
+    uv.x *= uRes.x / uRes.y;
+    uv *= 1.0 - uKick*0.13;                    // キックで FOV パンチ（強め）
+    uv += uKick*uKick*0.018*vec2(sin(uTime*93.0), cos(uTime*71.0));  // 打撃シェイク
+    uv *= 1.0 + uHatO*0.045;                   // 裏打ちで軽く引く（キックと逆位相）
+    uv.y -= uHatO*0.028;                       // ふわっと持ち上がるバウンス
+    uv *= 1.0 + uTurbo*0.10;                   // ターボ中は広角化（疾走の風圧）
+    // ステアリングに応じたバンク（ロール）
+    float bank = -uSteerV.x*0.35;
+    float cb = cos(bank), sb = sin(bank);
+    uv = mat2(cb, -sb, sb, cb)*uv;
+
+    float t0 = uTravel;
+    vec3 ro = vec3(pathT(t0), t0);
+    vec3 ta = vec3(pathT(t0 + 3.0), t0 + 3.0);
+    vec3 fw = normalize(ta - ro);
+    vec3 rt = normalize(cross(vec3(0.0, 1.0, 0.0), fw));
+    vec3 up = cross(fw, rt);
+    vec3 rd = normalize(fw*1.5 + rt*uv.x + up*uv.y);
+
+    float t = 0.0, glow = 0.0, ringGlow = 0.0;
+    for (int i = 0; i < ${MARCH_STEPS}; i++) {
+      vec3 p = ro + rd*t;
+      float d = map(p);
+      float rz = abs(fract(p.z) - 0.5)*2.0;         // 1 beat = 1 リング（拍の格子）
+      float ring = exp(-rz*rz*60.0);
+      float w = exp(-abs(d)*7.0);
+      glow += w*0.013;
+      ringGlow += w*ring*0.07;
+      if (d < 0.0015) break;
+      t += max(d*0.85, 0.01);
+      if (t > 50.0) break;
+    }
+
+    vec3 nc = neonColor(uSection);
+    vec3 acc = mix(nc, vec3(1.0, 0.9, 0.75), uStab*0.5);   // スタブで色が跳ねる
+    vec3 col = nc*glow*0.9 + acc*ringGlow*(0.9 + uKick*2.2 + uTurbo*0.6);
+    col += nc*0.06;
+    col += uHat*0.04*vec3(0.7, 0.85, 1.0)*(0.5 + 0.5*sin(vUv.y*uRes.y*0.8 + uTime*40.0));
+    col += nc*uHatO*0.05;                      // 裏打ちの淡いリフト
+    col = mix(col, vec3(0.01, 0.015, 0.03), smoothstep(18.0, 50.0, t));
+    col += vec3(1.0, 0.96, 0.9)*(uKick*0.12 + uFlash*0.22);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const postUniforms = {
+  tDiffuse: { value: null },
+  uRes:     { value: new THREE.Vector2() },
+  uKick:    { value: 0 },
+  uGlitch:  { value: 0 },
+  uFlash:   { value: 0 },
+  uTurbo:   { value: 0 },
+  uTime:    { value: 0 },
+  uSeed:    { value: 0.37 },
+};
+
+const POST_FRAG = /* glsl */`
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D tDiffuse;
+  uniform vec2 uRes;
+  uniform float uKick, uGlitch, uFlash, uTime, uSeed, uTurbo;
+
+  void main() {
+    vec2 uvv = vUv;
+    // ビート同期グリッチ: キック直撃の約 80ms だけ走るスライスリップ
+    float row = floor(uvv.y*30.0);
+    float h = fract(sin(row*91.17 + uSeed*713.3)*43758.55);
+    float kg = smoothstep(0.55, 0.9, uGlitch);
+    float slice = kg*step(0.5, h)*0.22 + uFlash*step(0.68, h)*0.3;
+    uvv.x += (h - 0.5)*2.0*slice;
+    // 強打時のブロックノイズ（モザイク破壊）
+    float bl = max(smoothstep(0.7, 0.95, uGlitch)*0.5, uFlash);
+    vec2 cells = vec2(24.0, 14.0);
+    vec2 cell = floor(uvv*cells);
+    float chash = fract(sin(dot(cell, vec2(12.9898, 78.233)) + uSeed*417.0)*43758.5);
+    if (chash > 1.0 - 0.25*bl) uvv = (cell + 0.5)/cells;
+    // キック連動クロマティックアベレーション（大げさ設定）
+    vec2 dir = uvv - 0.5;
+    float ca = 0.0012 + uKick*0.008 + uGlitch*0.012 + uFlash*0.02 + uTurbo*0.006;
+    float r  = texture2D(tDiffuse, uvv + dir*ca).r;
+    float gr = texture2D(tDiffuse, uvv).g;
+    float b  = texture2D(tDiffuse, uvv - dir*ca).b;
+    vec3 col = vec3(r, gr, b);
+    col *= 0.94 + 0.06*sin(uvv.y*uRes.y*3.14159);   // 走査線
+    float vig = 1.0 - 0.8*dot(dir, dir);
+    col *= clamp(vig, 0.0, 1.0);
+    col = pow(col, vec3(0.9));
+    if (uFlash > 0.92) col = 1.0 - col;   // セクション切替の一瞬だけネガ反転
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const sceneMat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: SCENE_FRAG, uniforms: sceneUniforms });
+const postMat  = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: POST_FRAG, uniforms: postUniforms });
+const sceneA = new THREE.Scene(); sceneA.add(new THREE.Mesh(quad, sceneMat));
+const sceneB = new THREE.Scene(); sceneB.add(new THREE.Mesh(quad, postMat));
+
+let rt = new THREE.WebGLRenderTarget(1, 1);
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  const pr = renderer.getPixelRatio();
+  rt.setSize(Math.floor(w*pr), Math.floor(h*pr));
+  sceneUniforms.uRes.value.set(w*pr, h*pr);
+  postUniforms.uRes.value.set(w*pr, h*pr);
+}
+window.addEventListener('resize', resize);
+resize();
+postUniforms.tDiffuse.value = rt.texture;
+
+/* ---------- 入力: マウス = ステア / ホイール = 速度 ---------- */
+let mx = 0, myUp = 0, steerX = 0, steerY = 0, speedMult = 1.0;
+function onPointer(x, y) {
+  mx = (x / window.innerWidth)*2 - 1;
+  myUp = -((y / window.innerHeight)*2 - 1);   // 画面上 = トンネルが上へ曲がる
+}
+window.addEventListener('mousemove', (e) => onPointer(e.clientX, e.clientY));
+window.addEventListener('touchmove', (e) => { const t = e.touches[0]; onPointer(t.clientX, t.clientY); }, { passive: true });
+window.addEventListener('wheel', (e) => {
+  speedMult = Math.min(2.0, Math.max(0.5, speedMult * (e.deltaY < 0 ? 1.08 : 0.93)));
+}, { passive: true });
+
+/* ---------- メインループ ---------- */
+let travel = 0, speed = BEATS_PER_SEC*0.35, lastT = performance.now() / 1000;
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now() / 1000;
+  const dt = Math.min(now - lastT, 0.05);
+  lastT = now;
+
+  tickSilent(now);
+  updateCount(now);
+  state.flash *= Math.exp(-dt*2.5);
+
+  // 速度: カウント中は徐行 → 明けたらセクション倍率 × ホイール
+  // ターボ包絡線（whoosh を合図にした突発加速。立ち上がり 0.25s / 抜け 0.9s）
+  const tSince = now - state.turboStart;
+  let turbo = 0;
+  if (tSince >= 0 && tSince < state.turboDur) {
+    turbo = Math.min(Math.min(1, tSince/0.25), Math.min(1, (state.turboDur - tSince)/0.9));
+  }
+  const preGo = now < countEnd;
+  const target = BEATS_PER_SEC * (preGo ? 0.35 : ARR[state.section].spd * speedMult) * (1 + turbo*1.3);
+  speed += (target - speed)*Math.min(1, dt*3);
+  const kickEnv = Math.exp(-(now - state.lastKick)*6.5);
+  const kickNow = kickEnv * state.kickW;
+  const stabNow = Math.exp(-(now - state.lastStab)*3.5);
+  travel += speed*dt*(1 + kickNow*0.45 + stabNow*0.5);   // キック=突き / スタブ=押し出しグライド
+  steerX += (mx - steerX)*Math.min(1, dt*2.5);
+  steerY += (myUp - steerY)*Math.min(1, dt*2.5);
+
+  sceneUniforms.uTime.value = now;
+  sceneUniforms.uTravel.value = travel;
+  sceneUniforms.uKick.value = kickNow;
+  sceneUniforms.uHat.value  = Math.exp(-(now - state.lastHat)*18.0);
+  sceneUniforms.uHatO.value = Math.exp(-(now - state.lastHatO)*9.0) * state.hatOW;
+  sceneUniforms.uStab.value = stabNow;
+  sceneUniforms.uBass.value = Math.exp(-(now - state.lastBass)*5.0);
+  sceneUniforms.uSection.value = state.section;
+  sceneUniforms.uFlash.value = state.flash;
+  sceneUniforms.uTurbo.value = turbo;
+  sceneUniforms.uSteerV.value.set(steerX, steerY);
+
+  postUniforms.uKick.value = sceneUniforms.uKick.value;
+  postUniforms.uGlitch.value = kickEnv * state.glitch;
+  postUniforms.uTurbo.value = turbo;
+  postUniforms.uFlash.value = state.flash;
+  postUniforms.uTime.value = now;
+  postUniforms.uSeed.value = state.seed;
+
+  renderer.setRenderTarget(rt);
+  renderer.render(sceneA, cam);
+  renderer.setRenderTarget(null);
+  renderer.render(sceneB, cam);
+}
+frame();
+</script>
+</body>
+</html>
