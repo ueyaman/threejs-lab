@@ -281,26 +281,26 @@
     <!-- ===== STATUS BANNER ===== -->
     <div class="banner">
       <span class="tag">Active</span>
-      <span><b>実験 8 件</b>。01–05 + 07–08 は Vercel 公開済み。最新作 <b style="color:var(--green)">08「Metaball Field」— シャボン玉メタボール + journey 背景スクロール</b>。<br><span style="color:var(--muted)">2026-07-16 更新: 08 を公開。半透明 body + fwidth 極細 rim のシャボン玉レンダリング。背景は太陽→宇宙→青空→雲→海→深海→マグマのプロシージャル旅。sin ステアリング + 壁バウンス + 球同士反発の物理。06「猫の骨格」は Cascadeur 物理クリーンアップ待ちで棚上げ継続（<code>docs/260618/STATUS.md</code>）。</span></span>
+      <span><b>実験 10 件</b>。01–05 + 07–10 は Vercel 公開済み。最新作 <b style="color:var(--green)">10「Neon Tunnel Rush」— ビートシンク・レイマーチングトンネル（デトロイトテクノ自前生成）</b>。<br><span style="color:var(--muted)">2026-07-23 更新: 10 を公開（調整継続中）。Tone.js 5 トラックの 127BPM を自前生成し、クロック駆動でキック=FOV パンチ / 裏打ち=バウンス / スタブ一撃=ターボ加速。応答は音楽的階層+確率で毎回変化。メガデモ路線 10〜17 のアイデア集は <code>docs/260723/demoscene-ideas.md</code>。06「猫の骨格」は Cascadeur 物理クリーンアップ待ちで棚上げ継続（<code>docs/260618/STATUS.md</code>）。</span></span>
     </div>
 
     <!-- ===== METRICS ===== -->
     <section>
-      <div class="sec-head"><span class="num">01</span><h2>サマリー</h2><span class="hint">2026-07-16 時点</span></div>
+      <div class="sec-head"><span class="num">01</span><h2>サマリー</h2><span class="hint">2026-07-23 時点</span></div>
       <div class="metrics">
-        <div class="metric"><div class="val accent">8</div><div class="lbl">実験（7 公開 + 1 Cascadeur 調整中）</div></div>
-        <div class="metric"><div class="val green">7</div><div class="lbl">公開中（Vercel / 01–05・07–08）</div></div>
+        <div class="metric"><div class="val accent">10</div><div class="lbl">実験（9 公開 + 1 Cascadeur 調整中）</div></div>
+        <div class="metric"><div class="val green">9</div><div class="lbl">公開中（Vercel / 01–05・07–10）</div></div>
         <div class="metric"><div class="val amber">1</div><div class="lbl">調整中（06・Cascadeur 課金ゲート待ち）</div></div>
-        <div class="metric"><div class="val">31</div><div class="lbl">Git コミット（最終 07-19 / 08 3D レイマーチング化公開）</div></div>
+        <div class="metric"><div class="val">35</div><div class="lbl">Git コミット（最終 07-23 / 10 Neon Tunnel Rush 公開）</div></div>
       </div>
       <div class="bars">
         <div class="bar-row">
-          <div class="bar-label"><span class="k">実験の完成度</span><span class="v">7.5 / 8 ・ 94%（06 は Cascadeur 物理クリーンアップ〜GLB が残り）</span></div>
-          <div class="track"><div class="fill green" style="width:94%"></div></div>
+          <div class="bar-label"><span class="k">実験の完成度</span><span class="v">9.5 / 10 ・ 95%（06 は Cascadeur 物理クリーンアップ〜GLB が残り）</span></div>
+          <div class="track"><div class="fill green" style="width:95%"></div></div>
         </div>
         <div class="bar-row">
-          <div class="bar-label"><span class="k">公開（デプロイ）進捗</span><span class="v">7 / 8 ・ 88%（06 は Cascadeur Indie 課金ゲート）</span></div>
-          <div class="track"><div class="fill accent" style="width:88%"></div></div>
+          <div class="bar-label"><span class="k">公開（デプロイ）進捗</span><span class="v">9 / 10 ・ 90%（06 は Cascadeur Indie 課金ゲート）</span></div>
+          <div class="track"><div class="fill accent" style="width:90%"></div></div>
         </div>
       </div>
     </section>
@@ -357,11 +357,17 @@
           <div class="tl-title">08 Metaball Field <span class="chip pub">公開中</span></div>
           <div class="tl-desc">シャボン玉メタボール。3D SDF レイマーチング化（smooth min 融合 / 2層透過 / 加算合成シャボン玉）+ 物理ルール拡張（速度変調・引力パルス・分裂・連鎖反応）+ 動画背景自動スクロール。commit 42b11a2。</div>
         </div>
-        <div class="tl-item now">
+        <div class="tl-item">
           <span class="dot"></span>
-          <div class="tl-date">2026-07-19 〜 07-22 ・ <b style="color:var(--green)">最新</b></div>
+          <div class="tl-date">2026-07-19 〜 07-22</div>
           <div class="tl-title">09 Flow Field <span class="chip pub">公開中</span></div>
           <div class="tl-desc">24,000 粒子のノイズ場漂流。速度→青/金の動的暖色（サージで金色に光り凪で青に戻る）。3重ランダムウォーク（明暗 / 動画α / 各速度もランダム）で毎回違う表情。水中動画 ⇔ プロシージャル深海フェード。commit 47515ac。</div>
+        </div>
+        <div class="tl-item now">
+          <span class="dot"></span>
+          <div class="tl-date">2026-07-23 ・ <b style="color:var(--green)">最新</b></div>
+          <div class="tl-title">10 Neon Tunnel Rush <span class="chip pub">公開（調整継続中）</span></div>
+          <div class="tl-desc">メガデモ路線第 1 弾。SDF レイマーチングトンネルを 127BPM のデトロイトテクノ（Tone.js 5 トラック自前生成・アセット 0）に完全同期で疾走。4 カウント自動発進・マウス=進行方向ステア（トンネル湾曲+バンク）・キック=FOV パンチ+サージ・裏打ち=浮遊バウンス・スタブ一撃=ターボ加速・BPM 同期グリッチ（確率ゲート）。応答は音楽的階層+乱数で毎回変化。アイデア集 <code>docs/260723/demoscene-ideas.md</code>（Opus×Fable 両採用の 10〜17 シリーズ）。</div>
         </div>
       </div>
     </section>
@@ -393,7 +399,7 @@
 
     <!-- ===== EXPERIMENTS ===== -->
     <section>
-      <div class="sec-head"><span class="num">04</span><h2>実験一覧</h2><span class="hint">5 完成公開 + 2 ローカル調整中</span></div>
+      <div class="sec-head"><span class="num">04</span><h2>実験一覧</h2><span class="hint">9 公開 + 1 調整中</span></div>
       <div class="tablewrap">
         <table>
           <thead>
@@ -452,6 +458,12 @@
               <td class="exp-id">09</td>
               <td class="exp-file"><a href="09-flow-field.html">09-flow-field.html</a></td>
               <td>フローフィールド — 24,000 微細粒子が fbm ノイズ場の見えない風に流される「無主体の漂流」。速度→青/金の動的暖色（サージで金色に光り凪で青に戻る）。3重ランダムウォーク（明暗 0〜2.0 / 動画α 0.15〜1.0 / 各速度もランダム）。水中動画背景 ⇔ プロシージャル深海がフェード。図地反転は6手法で挑戦し断念</td>
+              <td><span class="status pub"><span class="led"></span>公開中</span></td>
+            </tr>
+            <tr>
+              <td class="exp-id">10</td>
+              <td class="exp-file"><a href="10-neon-tunnel-rush.html">10-neon-tunnel-rush.html</a></td>
+              <td>ネオントンネル疾走 — SDF レイマーチングトンネル × <b>Tone.js デトロイトテクノ自前生成（127BPM・5 トラック・アセット 0）</b>。クロック駆動の完全ビートシンク: キック=FOV パンチ+前方サージ / 裏打ち=浮遊バウンス / スタブ一撃=ターボ加速 / BPM 同期グリッチ（スライス・モザイク・色収差）。応答は音楽的階層+確率ゲートで毎回変化。4 カウント自動発進・マウス=進行方向ステア（湾曲+バンク）・T=ターボ・M=ミュート</td>
               <td><span class="status pub"><span class="led"></span>公開中</span></td>
             </tr>
           </tbody>
@@ -543,6 +555,10 @@
         </li>
         <li>
           <span class="box"></span>
+          <span class="txt">10 Neon Tunnel Rush の継続調整 + シリーズ 11〜17<small>音の磨き（自作ワンショット差替え / Suno 曲差替えオプション）・エフェクト調整・モバイル確認。次の実験は 11 Kaleido Overdrive（アイデア集 <code>docs/260723/demoscene-ideas.md</code>）。</small></span>
+        </li>
+        <li>
+          <span class="box"></span>
           <span class="txt"><code>index.html</code> のサムネイルを実際のキャプチャ画像に差し替え<span class="opt">任意</span><small>現在は絵文字プレースホルダ（📦🗿🖼️👤🥚）。各実験の代表フレームに置換すると一覧の見栄えが向上。</small></span>
         </li>
         <li>
@@ -582,7 +598,7 @@
 
     <footer>
       <span>Three.js Lab — Project Status Report</span>
-      <span>更新: 2026-07-22（09 Flow Field 公開 — 速度→青/金の動的暖色 + 3重ランダムウォーク。08 3D レイマーチング公開済。06 は Cascadeur 物理クリーンアップ待ち）</span>
+      <span>更新: 2026-07-23（10 Neon Tunnel Rush 公開 — メガデモ路線第 1 弾・ビートシンクトンネル。調整継続中。06 は Cascadeur 物理クリーンアップ待ち）</span>
     </footer>
   </div>
 
