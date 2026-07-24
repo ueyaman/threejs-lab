@@ -1028,3 +1028,41 @@
   ジェスチャ内で無音 <audio>（data URI wav）をループ再生してセッションを
   playback 化 + Safari 17+ は navigator.audioSession.type='playback' を併用。
   この呼び出しは await Tone.start() の「前」（ジェスチャ文脈内）に置くのが必須。
+
+## 2026-07-24 — 10 音の磨き（Ableton ワンショット化 + ハウスグルーヴ）
+
+### AbletonMCP にはレンダー API が無い — Session クリップ再生状態のエクスポートで回す
+- `duplicate_to_arrangement` は古いリモートスクリプトで Unknown command。代替は
+  **単発ヒットを 2 小節間隔で並べた長尺クリップを鳴らしたまま File > Export**
+  （オフラインレンダーは再生中クリップを先頭から描画する）。手動はこの 1 操作だけ。
+- 複数音源の A/B は「前半 = キット A / 後半 = キット B」を同一クリップ長で並べ、
+  **1 回のエクスポートに両方収める**と往復が減る。
+- スライスは固定位置でなく **silencedetect（-55dB/0.3s）で無音境界から実測**、
+  パッドの正体は**帯域別 RMS（<200Hz / >6kHz）で判別**する（キットごとに
+  open hat のピッチ配置が違った: DS=44 / 909=46。46 を盲信すると即死）。
+
+### base64 mp3 ワンショットは「実測オフセット再生」でエンコーダ遅延を殺す
+- mp3 は先頭に ~25ms のエンコーダ遅延が入る。ブラウザの gapless 対応差に
+  依存せず、**デコード後に波形スキャンして最初の実音サンプルを start offset に**
+  すれば拍アタックがヨレない（Chrome は 0ms だったが Safari/Firefox の保険）。
+- 使い捨て BufferSource+Gain はヒット毎生成が定石。ただし **onended で
+  disconnect + 現行参照の掃除**、**src.start() の例外時も解放してから
+  フォールバック**まで書いて初めてリークフリー（Codex 指摘 2 件）。
+
+### チョークは「サンプル取得の成否」と切り離してイベント時点で必ず実行する
+- smpPlay 内でチョークすると、hatc だけデコード失敗した時に open hat が
+  止まらない・synth モード切替直後に鳴り残る。**choke は独立関数にして
+  トリガー地点で先に呼ぶ**（909 実機の closed→open チョーク再現も同じ経路）。
+- スタブ和音も同様に「新しい打が前の打を止める」（12ms リリース）で連打の
+  濁りが消える。**連打の最後だけ鳴き残す**と「ダダダッ、ジャーン」になる。
+
+### wall-clock 基準の演出ウィンドウは pause で時間がズレる
+- turboStart / revStart を performance.now() 基準にすると、Transport.pause 中も
+  窓が消費される。**resume 時に停止時間ぶん += でシフト**すれば済む。
+- クリック解錠(pointerdown/touchend/click 多重)と「クリック=pause トグル」は
+  競合する — **解錠成功時刻から 600ms は トグルを無視**が実効的だった。
+
+### Bedrock codex exec は stdin を閉じないと永久ハングする
+- `codex exec "プロンプト"` をバックグラウンドで投げたら「Reading additional
+  input from stdin...」のまま 25 分無応答。**`< /dev/null` を必ず付ける**。
+  ハングした codex.exe は残骸として溜まる（4 プロセス確認）ので taskkill で掃除。

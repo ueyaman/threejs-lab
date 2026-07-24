@@ -71,3 +71,13 @@ street_*.png
 flow-*.png
 flow-*.raw
 scratch-bgframe.png
+
+# 10 音の磨き (260724) — Ableton エクスポート WAV・中間生成物はローカルのみ。
+# 採用ワンショットは 10-neon-tunnel-rush.html に base64 で同梱済み(それが正)。
+docs/260724/*.wav
+docs/260724/*.asd
+docs/260724/slices/
+docs/260724/processed/
+docs/260724/*-samples-block.txt
+docs/260724/10-backup-*.html
+docs/260724/review-diff*.txt
