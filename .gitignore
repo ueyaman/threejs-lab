@@ -81,3 +81,11 @@ docs/260724/processed/
 docs/260724/*-samples-block.txt
 docs/260724/10-backup-*.html
 docs/260724/review-diff*.txt
+
+# 11 音・画像工房 (260724) — 中間生成物はローカルのみ(採用物は 11-kaleido-overdrive.html と assets/11-motifs/ が正)
+docs/260724/drum-samples-block-11.txt
+docs/260724/11-backup-*.html
+docs/260724/motif-src/
+docs/260724/motif-contact*.jpg
+docs/260724/*.png
+docs/260724/review-diff-11-module.js
